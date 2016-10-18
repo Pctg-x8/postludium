@@ -1,0 +1,11 @@
+[package]
+name = "postludium"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+
+[dependencies]
+lazy_static = "0.2.1"
+log = "0.3.6"
+itertools = "0.5.2"
+
+interlude = { path = "../interlude" }
