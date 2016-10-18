@@ -123,7 +123,7 @@ pub fn parse_image_format(args: &[char], screen_format: VkFormat) -> DevConfPars
 		{
 			&**CSTR_R8G8 => PartialEqualityMatchMap!(element_type;
 			{
-				&**CSTR_UNORM => VkFormat::R8G8B8A8_UNORM
+				&**CSTR_UNORM => VkFormat::R8G8_UNORM
 			}),
 			&**CSTR_R8G8B8A8 => PartialEqualityMatchMap!(element_type;
 			{
