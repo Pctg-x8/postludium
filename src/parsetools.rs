@@ -47,7 +47,7 @@ macro_rules! PartialEqualityMatchMap
 	{
 		$(if $src == $target { Some($st) })else* else { None }
 	};
-	($src: expr; { $ftarget: expr => $fst: expr, $($target: expr => $st: expr),*; _ => $est: expr }) =>
+	($src: expr; { $($target: expr => $st: expr),*; _ => $est: expr }) =>
 	{
 		$(if $src == $target { $st })else* else { $est }
 	}

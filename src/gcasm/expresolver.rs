@@ -1,221 +1,208 @@
-// Expression Resolvers
+// Expression Resolver
 
 use std;
-use std::collections::{HashMap, HashSet, LinkedList};
 use super::syntree::*;
+use std::collections::HashMap;
 use super::BuilderArguments;
-use interlude::ffi::*;
-use itertools::Itertools;
 use parsetools::ParseTools;
+use interlude::ffi::*;
 
-pub enum ResolveError<'a>
+#[derive(Clone, Copy, Debug)]
+pub enum DefinedData { Number(i64), Floating(f64) }
+impl DefinedData
 {
-	SelfRecurse(&'a [char]), UndefinedRef(&'a [char]), InjectionArgNotAllowed, UndefinedLabel(&'a [char]), InjectionArgRefOutOfBounds(u64)
+	pub fn require_number(self) -> Option<i64> { match self { DefinedData::Number(n) => Some(n), _ => None } }
+	pub fn require_floating(self) -> f64 { match self { DefinedData::Number(n) => n as f64, DefinedData::Floating(n) => n } }
+	pub fn is_floating(self) -> bool { match self { DefinedData::Floating(_) => true, _ => false } }
 }
-impl<'a> std::fmt::Display for ResolveError<'a>
+macro_rules!DefOperator
+{
+	($base: ident for DefinedData { fn $name: ident () { left $op: tt right } }) =>
+	{
+		impl std::ops::$base for DefinedData
+		{
+			type Output = Self;
+			fn $name(self, rhs: Self) -> Self
+			{
+				if let DefinedData::Number(l) = self
+				{
+					if let DefinedData::Number(r) = rhs { DefinedData::Number(l $op r) }
+					else { DefinedData::Floating(self.require_floating() $op rhs.require_floating()) }
+				}
+				else { DefinedData::Floating(self.require_floating() $op rhs.require_floating()) }
+			}
+		}
+	}
+}
+DefOperator!(Add for DefinedData { fn add() { left + right } });
+DefOperator!(Sub for DefinedData { fn sub() { left - right } });
+DefOperator!(Mul for DefinedData { fn mul() { left * right } });
+DefOperator!(Div for DefinedData { fn div() { left / right } });
+DefOperator!(Rem for DefinedData { fn rem() { left % right } });
+impl std::ops::Neg for DefinedData
+{
+	type Output = Self;
+
+	fn neg(self) -> Self
+	{
+		match self
+		{
+			DefinedData::Number(n) => DefinedData::Number(-n),
+			DefinedData::Floating(f) => DefinedData::Floating(-f)
+		}
+	}
+}
+pub type ResolvedDefinitions<'a> = HashMap<&'a [char], DefinedData>;
+
+pub enum ExpressionResolveError
+{
+	UndefinedRef(String), RequireInteger, ArgumentIndexOutOfRange(usize), ArgumentRefNotAllowed
+}
+impl std::fmt::Display for ExpressionResolveError
 {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
 	{
 		match self
 		{
-			&ResolveError::SelfRecurse(d) => write!(fmt, "{}: Self-recursed definition", d.clone_as_string()),
-			&ResolveError::UndefinedRef(d) => write!(fmt, "{}: Referencing undefined definition", d.clone_as_string()),
-			&ResolveError::InjectionArgNotAllowed => write!(fmt, "InjectionArg is not allowed here"),
-			&ResolveError::UndefinedLabel(d) => write!(fmt, "{}: Referencing undefined or illegal label", d.clone_as_string()),
-			&ResolveError::InjectionArgRefOutOfBounds(n) => write!(fmt, "{} is out of bounds of injection arguments", n)
+			&ExpressionResolveError::UndefinedRef(ref d) => write!(fmt, "{}: Referencing undefined definition", d),
+			&ExpressionResolveError::ArgumentIndexOutOfRange(d) => write!(fmt, "{} is out of range of argument(s)", d),
+			&ExpressionResolveError::RequireInteger => write!(fmt, "Integer required"),
+			&ExpressionResolveError::ArgumentRefNotAllowed => write!(fmt, "Referencing argument is not allowed here")
 		}
 	}
 }
-impl<'a> std::fmt::Debug for ResolveError<'a> { fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result { std::fmt::Display::fmt(self, fmt) } }
-type ResolvingResult<'a, T> = Result<T, ResolveError<'a>>;
+impl std::fmt::Debug for ExpressionResolveError { fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result { std::fmt::Display::fmt(self, fmt) } }
+pub type ExpressionResolveResult<T> = Result<T, ExpressionResolveError>;
 
 lazy_static!
 {
-	static ref BC_INDEX_READ: Vec<char> = "INDEX_READ".chars().collect_vec();
-	static ref BC_VERTEX_ATTRIBUTE_READ: Vec<char> = "VERTEX_ATTRIBUTE_READ".chars().collect_vec();
-	static ref BC_UNIFORM_READ: Vec<char> = "UNIFORM_READ".chars().collect_vec();
+	// Memory Access Mask //
+	static ref BC_INDEX_READ: Vec<char> = "INDEX_READ".chars().collect();
+	static ref BC_VERTEX_ATTRIBUTE_READ: Vec<char> = "VERTEX_ATTRIBUTE_READ".chars().collect();
+	static ref BC_UNIFORM_READ: Vec<char> = "UNIFORM_READ".chars().collect();
+	static ref BC_MEMORY_READ: Vec<char> = "MEMORY_READ".chars().collect();
+	static ref BC_TRANSFER_READ: Vec<char> = "TRANSFER_READ".chars().collect();
+	static ref BC_TRANSFER_WRITE: Vec<char> = "TRANSFER_WRITE".chars().collect();
+	static ref BC_COLOR_ATTACHMENT_WRITE: Vec<char> = "COLOR_ATTACHMENT_WRITE".chars().collect();
+	// Pipeline Stage Mask //
+	static ref BC_TOP: Vec<char> = "TOP".chars().collect();
+	static ref BC_BOTTOM: Vec<char> = "BOTTOM".chars().collect();
+	static ref BC_COLOR_ATTACHMENT_OUTPUT: Vec<char> = "COLOR_ATTACHMENT_OUTPUT".chars().collect();
+	static ref BC_TRANSFER: Vec<char> = "TRANSFER".chars().collect();
+	// Image Layout Names //
+	static ref BC_PRESENT_SRC: Vec<char> = "PRESENT_SRC".chars().collect();
+	static ref BC_COLOR_ATTACHMENT_OPT: Vec<char> = "COLOR_ATTACHMENT_OPT".chars().collect();
+	// Internal Indices //
+	static ref BC_FRAMEBUFFER_IMAGE: Vec<char> = "FRAMEBUFFER_IMAGE".chars().collect();
+	static ref BC_IMAGE_SUBRESOURCE_COLOR: Vec<char> = "IMAGE_SUBRESOURCE_COLOR".chars().collect();
 }
-pub enum ResolvedCommand
+pub fn builtin_defs<'a>(name: &'a [char]) -> Option<i64>
 {
-	// Graphics Binders //
-	BindPipelineState(u32),
-	BindDescriptorSet(u32, u32, u32),
-	BindVertexBuffer(u32, u32),
-	BindIndexBuffer(u32),
-	PushConstant(u32, u32, f64),
-	// Graphics Drawers //
-	Draw(u32, u32),
-	DrawIndexed(u32, u32),
-	// Memory Barriers //
-	BufferBarrier(u32, u32, u32, i32, u32, u32),
-	ImageBarrier(u32, u32, u32, u32, u32, u32, u32, u32),
-	// Copying Commands //
-	CopyBuffer(u32, u32, u32, i32, u32)
+	PartialEqualityMatchMap!(name;
+	{
+		&**BC_INDEX_READ => VK_ACCESS_INDEX_READ_BIT as i64,
+		&**BC_VERTEX_ATTRIBUTE_READ => VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT as i64,
+		&**BC_UNIFORM_READ => VK_ACCESS_UNIFORM_READ_BIT as i64,
+		&**BC_MEMORY_READ => VK_ACCESS_MEMORY_READ_BIT as i64,
+		&**BC_TRANSFER_READ => VK_ACCESS_TRANSFER_READ_BIT as i64,
+		&**BC_TRANSFER_WRITE => VK_ACCESS_TRANSFER_WRITE_BIT as i64,
+		&**BC_COLOR_ATTACHMENT_WRITE => VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT as i64,
+		&**BC_TOP => VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT as i64,
+		&**BC_BOTTOM => VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT as i64,
+		&**BC_TRANSFER => VK_PIPELINE_STAGE_TRANSFER_BIT as i64,
+		&**BC_COLOR_ATTACHMENT_OUTPUT => VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT as i64,
+		&**BC_PRESENT_SRC => VkImageLayout::PresentSrcKHR as i64,
+		&**BC_COLOR_ATTACHMENT_OPT => VkImageLayout::ColorAttachmentOptimal as i64,
+		&**BC_FRAMEBUFFER_IMAGE => -1,
+		&**BC_IMAGE_SUBRESOURCE_COLOR => 0
+	})
 }
-type ResolvedCommands = LinkedList<ResolvedCommand>;
 
-pub enum ResolvedLabelCommandLevel { Primary, Secondary }
-pub enum ResolvedSubpassIndex { Pre, Post, Pass(u32) }
-pub enum ResolvedLabelRenderedFB { Swapchain(ResolvedSubpassIndex), Custom(u32, ResolvedSubpassIndex) }
-pub struct ResolvedRenderingLabelBlock { cmdlevel: ResolvedLabelCommandLevel, rendered_fb: ResolvedLabelRenderedFB, commands: ResolvedCommands }
-pub struct ResolvedTransferLabelBlock { cmdlevel: ResolvedLabelCommandLevel, commands: ResolvedCommands }
-pub struct Resolver<'a> { args: BuilderArguments, defs: HashMap<&'a [char], f64> }
-pub struct Resolved<'a>
+impl<'a> ExpressionNode<'a>
 {
-	args: BuilderArguments, defs: HashMap<&'a [char], f64>,
-	render_blocks: HashMap<&'a [char], ResolvedRenderingLabelBlock>,
-	transfer_blocks: HashMap<&'a [char], ResolvedTransferLabelBlock>
-}
-macro_rules! MultiResolver
-{
-	{ ($($ex: expr => $t: ty),*) => $reducer: path } =>
+	pub fn resolve_soft(&self, args: &BuilderArguments, defs: &ResolvedDefinitions<'a>, iarg: Option<&Vec<DefinedData>>) -> ExpressionResolveResult<DefinedData>
 	{
-		$reducer($(try!($ex.resolve_i64(&self.args, &self.defs, iargs)) as $t),*)
-	}
-}
-impl<'a> Resolver<'a>
-{
-	pub fn resolve(args: BuilderArguments, defs: HashMap<&'a [char], ExpressionNode<'a>>, labels: HashMap<&'a [char], LabelBlock<'a>>)
-	{
-		Self::resolve_defs(args, defs).map(|resolver| resolver.resolve_commands(labels));
-	}
-
-	fn builtin_defs(name: &'a [char]) -> Option<u32>
-	{
-		PartialEqualityMatchMap!(name;
+		match self
 		{
-			&**BC_INDEX_READ => VK_ACCESS_INDEX_READ_BIT,
-			&**BC_VERTEX_ATTRIBUTE_READ => VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT,
-			&**BC_UNIFORM_READ => VK_ACCESS_UNIFORM_READ_BIT
-		})
-	}
-
-	pub fn resolve_defs(args: BuilderArguments, src: HashMap<&'a [char], ExpressionNode<'a>>) -> ResolvingResult<'a, Self>
-	{
-		let mut defdeps = HashMap::new();
-		for (&n, x) in src.iter()
-		{
-			defdeps.insert(n, Self::find_deps(x));
-		}
-		let mut added_names = HashSet::new();
-		let deflist_vl = try!(defdeps.iter().map(|(d, dd)| Self::build_deflist(&mut added_names, &defdeps, d, dd)).collect::<Result<Vec<_>, _>>());
-		let deflist = deflist_vl.into_iter().flatten().collect_vec();
-		// println!("{:?}", deflist);
-
-		let mut dst = Resolver { args: args, defs: HashMap::new() };
-		for n in deflist
-		{
-			let xv = try!(src.get(&n).unwrap().resolve(&args, &dst.defs, None));
-			dst.defs.insert(n, xv);
-		}
-		Ok(dst)
-	}
-	// find dependency(a -> [b, c]: a depends (has references to) b and c)
-	fn find_deps(current: &ExpressionNode<'a>) -> Vec<&'a [char]>
-	{
-		match current
-		{
-			&ExpressionNode::ConstantRef(refn) => if Self::builtin_defs(refn).is_none() { vec![refn] } else { Vec::new() },
-			&ExpressionNode::ExternalU32(ref x) | &ExpressionNode::Negated(ref x) => Self::find_deps(x),
-			&ExpressionNode::Add(ref x, ref y) | &ExpressionNode::Sub(ref x, ref y) |
-			&ExpressionNode::Mul(ref x, ref y) | &ExpressionNode::Div(ref x, ref y) | &ExpressionNode::Mod(ref x, ref y) |
-			&ExpressionNode::And(ref x, ref y) | &ExpressionNode::Or(ref x, ref y) | &ExpressionNode::Xor(ref x, ref y) =>
+			&ExpressionNode::Number(n) => Ok(DefinedData::Number(n as i64)),
+			&ExpressionNode::Floating(n) => Ok(DefinedData::Floating(n)),
+			&ExpressionNode::ConstantRef(refn) => if let Some(v) = builtin_defs(refn) { Ok(DefinedData::Number(v)) }
+				else if let Some(&v) = defs.get(refn) { Ok(v) } else { Err(ExpressionResolveError::UndefinedRef(refn.clone_as_string())) },
+			&ExpressionNode::InjectionArgRef(refn) => if let Some(iargs) = iarg
 			{
-				Self::find_deps(x).into_iter().chain(Self::find_deps(y)).collect_vec()
-			},
-			_ => Vec::new()
-		}
-	}
-	fn build_deflist(added: &mut HashSet<&'a [char]>, tree: &HashMap<&'a [char], Vec<&'a [char]>>, current: &'a [char], current_deps: &Vec<&'a [char]>) -> ResolvingResult<'a, LinkedList<&'a [char]>>
-	{
-		let deps = try!(current_deps.iter().map(|d| if *d == current { Err(ResolveError::SelfRecurse(d)) } else if let Some(dd) = tree.get(d) { Ok((d, dd)) }
-			else { Err(ResolveError::UndefinedRef(d)) }).collect::<Result<Vec<_>, _>>());
-		let mut ll = try!(deps.into_iter().map(|(d, dd)| Self::build_deflist(added, tree, d, dd)).collect::<Result<Vec<_>, _>>().map(|lv| lv.into_iter().flatten().collect::<LinkedList<_>>()));
-		if !added.contains(&current)
-		{
-			added.insert(current);
-			ll.push_back(current);
-		}
-		Ok(ll)
-	}
-
-	pub fn resolve_commands(self, mut src: HashMap<&'a [char], LabelBlock<'a>>) -> ResolvingResult<'a, (HashMap<&'a [char], ResolvedRenderingLabelBlock>, HashMap<&'a [char], ResolvedTransferLabelBlock>)>
-	{
-		let (lazy_resolved, imm_resolved): (HashMap<&'a [char], LabelBlock<'a>>, HashMap<&'a [char], LabelBlock<'a>>) = src.into_iter().partition(|&(_, ref b)| b.attributes.is_injected());
-		let mut resolved_render_labels = HashMap::new();
-		let mut resolved_transfer_labels = HashMap::new();
-		for (name, blk) in imm_resolved
-		{
-			let commands = try!(self.resolve_in_label(None, &lazy_resolved, &blk.commands));
-			match blk.attribute
-			{
-				LabelAttribute::Graphics(level, fb) => resolved_render_labels.insert(name, ResolvedRenderingLabelBlock
-				{
-					cmdlevel: match level { LabelType::Primary => ResolvedLabelCommandLevel::Primary, LabelType::Secondary => ResolvedLabelCommandLevel::Secondary, _ => unreachable!() },
-					rendered_fb: try!(match fb
-					{
-						LabelRenderedFB::Swapchain(sub) => self.parse_subpass_index(sub).map(ResolvedLabelRenderedFB::Swapchain),
-						LabelRenderedFB::Backbuffer(fbid, sub) => fbid.resolve_i64(&self.args, &self.defs, None).and_then(|fbid| self.parse_subpass_index(sub).map(move |sub| ResolvedLabelRenderedFB::Custom(fbid, sub)))
-					}),
-					commands: commands
-				}),
-				LabelAttribute::Transfer(level) => resolved_transfer_labels.insert(name, ResolvedTransferLabelBlock
-				{
-					cmdlevel: match level { LabelType::Primary => ResolvedLabelCommandLevel::Primary, LabelType::Secondary => ResolvedLabelCommandLevel::Seconadry, _ => unreachable!() },
-					commands: commands	
-				})
+				if iargs.len() > refn as usize { Ok(iargs[refn as usize]) } else { Err(ExpressionResolveError::ArgumentIndexOutOfRange(refn as usize)) }
 			}
-		}
-		Ok((resolved_render_labels, resolved_transfer_labels))
-	}
-	fn resolve_in_label(&self, iargs: Option<Vec<f64>>, inj_labels: &HashMap<&'a [char], LabelBlock<'a>>, lb: &LinkedList<CommandNode<'a>>) -> ResolvingResult<'a, ResolvedCommands>
-	{
-		let resolved = ResolvedCommands::new();
-
-		for cmd in lb
-		{
-			match cmd
+			else { Err(ExpressionResolveError::ArgumentRefNotAllowed) },
+			&ExpressionNode::Negated(ref x) => x.resolve_soft(args, defs, iarg).map(|x| -x),
+			&ExpressionNode::ExternalU32(ref x) => x.resolve_i64(args, defs, iarg).and_then(|x| if (x as usize) < args.external_u32s.len()
 			{
-				&CommandNode::BindPipelineState(ref psid) =>
-					resolved.push_back(MultiResolver!{ (psid => u32) => ResolvedCommand::BindPipelineState }),
-				&CommandNode::BindDescriptorSet(ref dlid, ref slot, ref dsid) =>
-					resolved.push_back(MultiResolver!{ (dlid => u32, slot => u32, dsid => u32) => ResolvedCommand::BindDescriptorSet }),
-				&CommandNode::BindVertexBuffer(ref slot, ref vbid) =>
-					resolved.push_back(MultiResolver!{ (slot => u32, vbid => u32) => ResolvedCommand::BindVertexBuffer }),
-				&CommandNode::BindIndexBuffer(ref ibid) =>
-					resolved.push_back(MultiResolver!{ (ibid => u32) => ResolvedCommand::BindIndexBuffer }),
-				&CommandNode::PushConstant(ref dlid, ref pcid, ref val) => try!(resolved.push_back(dlid.resolve_i64(&self.args, &self.defs, iargs)
-					.and_then(|dlid| pcid.resolve_i64(&self.args, &self.defs, iargs).and_then(move |pcid| val.resolve_soft(&self.args, &self.defs, iargs).map(move |val| (dlid as u32, pcid as u32, iargs))))
-					.map(ResolvedCommand::PushConstant))),
-				&CommandNode::Draw(ref vc, ref ic) =>
-					resolved.push_back(MultiResolver!{ (vc => u32, ic => u32) => ResolvedCommand::Draw }),
-				&CommandNode::DrawIndexed(ref vc, ref ic) =>
-					resolved.push_back(MultiResolver!{ (vc => u32, ic => u32) => ResolvedCommand::DrawIndexed }),
-				&CommandNode::BufferBarrier(ref sps, ref dps, ref offs, ref size, ref smu, ref dmu) =>
-					resolved.push_back(MultiResolver!{ (sps => u32, dps => u32, offs => u32, size => i32, smu => u32, dmu => u32) => ResolvedCommand::BufferBarrier }),
-				&CommandNode::ImageBarrier(ref sps, ref dps, ref img, ref ims, ref smu, ref dmu, ref sil, ref dil) => 
-					resolved.push_back(MultiResolver!{ (sps => u32, dps => u32, img => u32, ims => u32, smu => u32, dmu => u32, sil => u32, dil => u32) => ResolvedCommand::ImageBarrier }),
-				&CommandNode::CopyBuffer(ref sbid, ref dbid, ref sof, ref size, ref dof) =>
-					resolved.push_back(MultiResolver!{ (sbid => u32, dbid => u32, sof => u32, size => i32, dof => u32) => ResolvedCommand::CopyBuffer }),
-				&CommandNode::InjectCommands(name, ref iargs) => try!(if let Some(lb_target) = inj_labels.get(name)
-				{
-					iargs.iter().map(|v| v.resolve_soft(&self.args, &self.defs, iargs)).collect::<ExpressionResolvingResult>()
-						.and_then(|iargs_resolved| self.resolve_in_label(Some(iargs_resolved), inj_labels, &lb_target.commands))
-						.map(|rescommands| resolved.append(&mut rescommands))
-				}
-				else { return Err(ResolveError::UndefinedLabel(name)); })
+				Ok(DefinedData::Number(args.external_u32s[x as usize] as i64))
 			}
+			else { Err(ExpressionResolveError::ArgumentIndexOutOfRange(x as usize)) }),
+			&ExpressionNode::Add(ref a, ref b) => a.resolve_soft(args, defs, iarg).and_then(|x| b.resolve_soft(args, defs, iarg).map(move |y| x + y)),
+			&ExpressionNode::Sub(ref a, ref b) => a.resolve_soft(args, defs, iarg).and_then(|x| b.resolve_soft(args, defs, iarg).map(move |y| x - y)),
+			&ExpressionNode::Mul(ref a, ref b) => a.resolve_soft(args, defs, iarg).and_then(|x| b.resolve_soft(args, defs, iarg).map(move |y| x * y)),
+			&ExpressionNode::Div(ref a, ref b) => a.resolve_soft(args, defs, iarg).and_then(|x| b.resolve_soft(args, defs, iarg).map(move |y| x / y)),
+			&ExpressionNode::Mod(ref a, ref b) => a.resolve_soft(args, defs, iarg).and_then(|x| b.resolve_soft(args, defs, iarg).map(move |y| x % y)),
+			&ExpressionNode::And(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| DefinedData::Number(x & y))),
+			&ExpressionNode::Or (ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| DefinedData::Number(x | y))),
+			&ExpressionNode::Xor(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| DefinedData::Number(x ^ y)))
 		}
-
-		Ok(resolved)
 	}
-	fn parse_subpass_index(&self, ex: &RenderedSubpass<'a>) -> ExpressionResolveResult<ResolvedSubpassIndex>
+	pub fn resolve(&self, args: &BuilderArguments, defs: &ResolvedDefinitions<'a>, iarg: Option<&Vec<DefinedData>>) -> ExpressionResolveResult<f64>
 	{
-		match ex
+		match self
 		{
-			&RenderedSubpass::Pre => Ok(ResolvedSubpassIndex::Pre),
-			&RenderedSubpass::Post => Ok(ResolvedSubpassIndex::Post),
-			&RenderedSubpass::Sub(ex) => ex.resolve(&self.args, &self.defs, None).map(|si| ResolvedSubpassIndex::Pass(si as u32))
+			&ExpressionNode::Number(n) => Ok(n as f64),
+			&ExpressionNode::Floating(n) => Ok(n),
+			&ExpressionNode::ConstantRef(refn) => if let Some(v) = builtin_defs(refn) { Ok(v as f64) }
+				else if let Some(&v) = defs.get(refn) { Ok(v.require_floating()) } else { Err(ExpressionResolveError::UndefinedRef(refn.clone_as_string())) },
+			&ExpressionNode::InjectionArgRef(refn) => if let Some(iargs) = iarg
+			{
+				if iargs.len() > refn as usize { Ok(iargs[refn as usize].require_floating()) } else { Err(ExpressionResolveError::ArgumentIndexOutOfRange(refn as usize)) }
+			}
+			else { Err(ExpressionResolveError::ArgumentRefNotAllowed) },
+			&ExpressionNode::Negated(ref x) => x.resolve(args, defs, iarg).map(|x| -x),
+			&ExpressionNode::ExternalU32(ref x) => x.resolve(args, defs, iarg).and_then(|x| if (x as usize) < args.external_u32s.len()
+			{
+				Ok(args.external_u32s[x as usize] as f64)
+			} else { Err(ExpressionResolveError::ArgumentIndexOutOfRange(x as usize)) }),
+			&ExpressionNode::Add(ref a, ref b) => a.resolve(args, defs, iarg).and_then(|x| b.resolve(args, defs, iarg).map(move |y| x + y)),
+			&ExpressionNode::Sub(ref a, ref b) => a.resolve(args, defs, iarg).and_then(|x| b.resolve(args, defs, iarg).map(move |y| x - y)),
+			&ExpressionNode::Mul(ref a, ref b) => a.resolve(args, defs, iarg).and_then(|x| b.resolve(args, defs, iarg).map(move |y| x * y)),
+			&ExpressionNode::Div(ref a, ref b) => a.resolve(args, defs, iarg).and_then(|x| b.resolve(args, defs, iarg).map(move |y| x / y)),
+			&ExpressionNode::Mod(ref a, ref b) => a.resolve(args, defs, iarg).and_then(|x| b.resolve(args, defs, iarg).map(move |y| x % y)),
+			_ => Err(ExpressionResolveError::RequireInteger)
+		}
+	}
+	pub fn resolve_i64(&self, args: &BuilderArguments, defs: &ResolvedDefinitions<'a>, iarg: Option<&Vec<DefinedData>>) -> ExpressionResolveResult<i64>
+	{
+		match self
+		{
+			&ExpressionNode::Number(n) => Ok(n as i64),
+			&ExpressionNode::Floating(_) => Err(ExpressionResolveError::RequireInteger),
+			&ExpressionNode::ConstantRef(refn) => if let Some(v) = builtin_defs(refn) { Ok(v) }
+				else if let Some(&v) = defs.get(refn) { v.require_number().ok_or(ExpressionResolveError::RequireInteger) }
+				else { Err(ExpressionResolveError::UndefinedRef(refn.clone_as_string())) },
+			&ExpressionNode::InjectionArgRef(refn) => if let Some(iargs) = iarg
+			{
+				if iargs.len() > refn as usize { iargs[refn as usize].require_number().ok_or(ExpressionResolveError::RequireInteger) }
+				else { Err(ExpressionResolveError::ArgumentIndexOutOfRange(refn as usize)) }
+			}
+			else { Err(ExpressionResolveError::ArgumentRefNotAllowed) },
+			&ExpressionNode::Negated(ref x) => x.resolve_i64(args, defs, iarg).map(|x| -x),
+			&ExpressionNode::ExternalU32(ref x) => x.resolve_i64(args, defs, iarg).and_then(|x| if (x as usize) < args.external_u32s.len()
+			{
+				Ok(args.external_u32s[x as usize] as i64)
+			} else { Err(ExpressionResolveError::ArgumentIndexOutOfRange(x as usize)) }),
+			&ExpressionNode::Add(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x + y)),
+			&ExpressionNode::Sub(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x - y)),
+			&ExpressionNode::Mul(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x * y)),
+			&ExpressionNode::Div(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x / y)),
+			&ExpressionNode::Mod(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x % y)),
+			&ExpressionNode::And(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x & y)),
+			&ExpressionNode::Or(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x | y)),
+			&ExpressionNode::Xor(ref a, ref b) => a.resolve_i64(args, defs, iarg).and_then(|x| b.resolve_i64(args, defs, iarg).map(move |y| x ^ y))
 		}
 	}
 }

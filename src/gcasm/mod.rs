@@ -1,9 +1,11 @@
 pub mod parser;
 pub mod syntree;
 pub use self::parser as asmparser;
-pub mod expresolver;
-pub use self::expresolver::Resolver as ExpressionResolver;
+mod expresolver;
+pub mod resolver;
+pub use self::resolver::Resolver;
 
+#[derive(Debug)]
 pub struct BuilderArguments
 {
 	pub external_u32s: Vec<u32>
@@ -19,13 +21,13 @@ mod combined_test
 
 	#[test] fn defresolve()
 	{
-		let mut testcase = ".define TEST 1\n.define TEST2 TEST + 2\n.define TEST3 TEST4 + 1\n.define TEST4 TEST2\n.define TEST5 TEST7\n.define TEST6 TEST7\n.define TEST7 TEST8 + TEST3\n.define TEST8 0".to_owned();
+		let testcase = ".define TEST 1\n.define TEST2 TEST + 2\n.define TEST3 TEST4 + 1\n.define TEST4 TEST2\n.define TEST5 TEST7\n.define TEST6 TEST7\n.define TEST7 TEST8 + TEST3\n.define TEST8 0".to_owned();
 		let testcase_chars = testcase.chars().collect_vec();
 		let testcase_lines = LazyLinesChars::new(&testcase_chars);
 		let (labels, deflist_ir) = super::asmparser::parse_lines(testcase_lines);
 		
 		let args = super::BuilderArguments { external_u32s: vec![128] };
-		let deflist = super::ExpressionResolver::resolve(args, deflist_ir, labels);
+		let resolved = super::Resolver::resolve(args, deflist_ir, labels);
 
 		unimplemented!();
 	}
@@ -38,7 +40,8 @@ mod combined_test
 		let (labels, deflist_ir) = super::asmparser::parse_lines(testcase_lines);
 		
 		let args = super::BuilderArguments { external_u32s: vec![128] };
-		let deflist = super::ExpressionResolver::resolve(args, deflist_ir, labels);
+		let resolved = super::Resolver::resolve(args, deflist_ir, labels).unwrap();
+		println!("{:?}", resolved);
 
 		unimplemented!();
 	}

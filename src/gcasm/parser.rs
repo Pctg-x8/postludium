@@ -1,12 +1,9 @@
 // GPU Command Assembly Parser
 
 use std;
-use std::string::String;
 use parsetools::ParseTools;
 use lazylines::*;
-use itertools::Itertools;
-use std::collections::{HashMap, LinkedList};
-use interlude::ffi::*;
+use std::collections::HashMap;
 
 use super::syntree::*;
 
@@ -41,6 +38,7 @@ impl<'a, T> ParserChainData<'a, T>
 		if self.0.is_ok() { ParserChainData(self.0, self.1.skip_while(is_space)) }
 		else { self }
 	}
+	#[allow(dead_code)]
 	fn syntax_char(self, ch: char) -> Self
 	{
 		if self.0.is_err() { self }
@@ -464,8 +462,6 @@ mod test
 {
 	use itertools::Itertools;
 	use lazylines::*;
-	use std;
-	use std::io::prelude::*;
 	use super::super::syntree::*;
 
 	#[test] fn parse_define()
