@@ -4,6 +4,8 @@ pub use self::parser as asmparser;
 mod expresolver;
 pub mod resolver;
 pub use self::resolver::Resolver;
+pub mod arranger;
+pub use self::arranger::arrange_label_blocks;
 
 #[derive(Debug)]
 pub struct BuilderArguments
@@ -27,9 +29,7 @@ mod combined_test
 		let (labels, deflist_ir) = super::asmparser::parse_lines(testcase_lines);
 		
 		let args = super::BuilderArguments { external_u32s: vec![128] };
-		let resolved = super::Resolver::resolve(args, deflist_ir, labels);
-
-		unimplemented!();
+		super::Resolver::resolve(args, deflist_ir, labels).unwrap();
 	}
 	#[test] fn parse_objective()
 	{
@@ -42,6 +42,8 @@ mod combined_test
 		let args = super::BuilderArguments { external_u32s: vec![128] };
 		let resolved = super::Resolver::resolve(args, deflist_ir, labels).unwrap();
 		println!("{:?}", resolved);
+		let arranged = super::arrange_label_blocks(resolved);
+		println!("\n{:?}", arranged);
 
 		unimplemented!();
 	}

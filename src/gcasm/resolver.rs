@@ -50,25 +50,36 @@ pub enum ResolvedCommand
 	// Copying Commands //
 	CopyBuffer(u32, u32, u32, i32, u32)
 }
-type ResolvedCommands = LinkedList<ResolvedCommand>;
+pub type ResolvedCommands = LinkedList<ResolvedCommand>;
 
 #[derive(Debug)]
 pub enum ResolvedLabelCommandLevel { Primary, Secondary }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ResolvedSubpassIndex { Pre, Post, Pass(u32) }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ResolvedLabelRenderedFB { Swapchain(ResolvedSubpassIndex), Custom(u32, ResolvedSubpassIndex) }
+impl ResolvedLabelRenderedFB
+{
+	pub fn eq_framebuffer_ref(&self, other: &Self) -> bool
+	{
+		match self
+		{
+			&ResolvedLabelRenderedFB::Swapchain(_) => match other { &ResolvedLabelRenderedFB::Swapchain(_) => true, _ => false },
+			&ResolvedLabelRenderedFB::Custom(fbr, _) => match other { &ResolvedLabelRenderedFB::Custom(fbr2, _) if fbr == fbr2 => true, _ => false }
+		}
+	}
+}
 #[derive(Debug)]
-pub struct ResolvedRenderingLabelBlock { cmdlevel: ResolvedLabelCommandLevel, rendered_fb: ResolvedLabelRenderedFB, commands: ResolvedCommands }
+pub struct ResolvedRenderingLabelBlock { pub cmdlevel: ResolvedLabelCommandLevel, pub rendered_fb: ResolvedLabelRenderedFB, pub commands: ResolvedCommands }
 #[derive(Debug)]
-pub struct ResolvedTransferLabelBlock { cmdlevel: ResolvedLabelCommandLevel, commands: ResolvedCommands }
+pub struct ResolvedTransferLabelBlock { pub cmdlevel: ResolvedLabelCommandLevel, pub commands: ResolvedCommands }
 pub struct Resolver<'a> { args: BuilderArguments, defs: HashMap<&'a [char], DefinedData> }
 #[derive(Debug)]
 pub struct Resolved<'a>
 {
-	args: BuilderArguments,
-	render_blocks: HashMap<&'a [char], ResolvedRenderingLabelBlock>,
-	transfer_blocks: HashMap<&'a [char], ResolvedTransferLabelBlock>
+	pub args: BuilderArguments,
+	pub render_blocks: HashMap<&'a [char], ResolvedRenderingLabelBlock>,
+	pub transfer_blocks: HashMap<&'a [char], ResolvedTransferLabelBlock>
 }
 pub trait ResolvedExpressionList<'a> where Self: std::marker::Sized + IntoIterator<Item=&'a &'a ExpressionNode<'a>>
 {
