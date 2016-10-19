@@ -56,6 +56,11 @@ pub type ResolvedCommands = LinkedList<ResolvedCommand>;
 pub enum ResolvedLabelCommandLevel { Primary, Secondary }
 #[derive(Debug, Clone, Copy)]
 pub enum ResolvedSubpassIndex { Pre, Post, Pass(u32) }
+impl ResolvedSubpassIndex
+{
+	pub fn is_prepass(&self) -> bool { match self { &ResolvedSubpassIndex::Pre => true, _ => false } }
+	pub fn is_postpass(&self) -> bool { match self { &ResolvedSubpassIndex::Post => true, _ => false } }
+}
 #[derive(Debug, Clone, Copy)]
 pub enum ResolvedLabelRenderedFB { Swapchain(ResolvedSubpassIndex), Custom(u32, ResolvedSubpassIndex) }
 impl ResolvedLabelRenderedFB
@@ -68,6 +73,14 @@ impl ResolvedLabelRenderedFB
 			&ResolvedLabelRenderedFB::Custom(fbr, _) => match other { &ResolvedLabelRenderedFB::Custom(fbr2, _) if fbr == fbr2 => true, _ => false }
 		}
 	}
+	/*pub fn is_prepass(&self) -> bool
+	{
+		if let &ResolvedLabelRenderedFB::Swapchain(s) | &ResolvedLabelRenderedFB::Custom(_, s) = self { s.is_prepass() } else { false }
+	}
+	pub fn is_prepass(&self) -> bool
+	{
+		if let &ResolvedLabelRenderedFB::Swapchain(s) | &ResolvedLabelRenderedFB::Custom(_, s) = self { s.is_postpass() } else { false }
+	}*/
 }
 #[derive(Debug)]
 pub struct ResolvedRenderingLabelBlock { pub cmdlevel: ResolvedLabelCommandLevel, pub rendered_fb: ResolvedLabelRenderedFB, pub commands: ResolvedCommands }

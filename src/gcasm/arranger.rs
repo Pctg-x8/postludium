@@ -8,7 +8,7 @@ pub struct ArrangedCommands
 {
 	rendering: Option<LBRenderingCommands>, transfering: Option<LBSubpass>
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum LBRenderTargetRef { Swapchain, Custom(u32) }
 #[derive(Debug)]
 pub struct LBRenderingCommands { render_passes: Vec<LBRenderPass> }
@@ -17,11 +17,32 @@ pub struct LBRenderPass { render_target_ref: LBRenderTargetRef, prepass: Option<
 #[derive(Debug)]
 pub struct LBSubpass { commands: ResolvedCommands }
 
+pub fn group_blocks_by_rt<'a>(blocks: HashMap<&'a [char], ResolvedRenderingLabelBlock>)
+	-> HashMap<LBRenderTargetRef, Vec<ResolvedRenderingLabelBlock>>
+{
+	let mut groups = HashMap::new();
+	for (_, blk) in blocks
+	{
+		groups.entry(match blk.rendered_fb
+		{
+			ResolvedLabelRenderedFB::Swapchain(_) => LBRenderTargetRef::Swapchain,
+			ResolvedLabelRenderedFB::Custom(fbr, _) => LBRenderTargetRef::Custom(fbr)
+		}).or_insert(Vec::new()).push(blk)
+	}
+	groups
+}
+
 pub fn arrange_label_blocks<'a>(resolved: Resolved<'a>) -> ArrangedCommands
 {
 	let rendering_commands = if resolved.render_blocks.is_empty() { None }
 	else
 	{
+		/*for (rt_ref, blks) in group_blocks_by_rt(resolved.render_blocks)
+		{
+			let pre = blks.filter(|x| x.rendered_fb.is_prepass()).flat_map(|x| x.commands).collect_vec();
+			let post = blks.filter(|x| x.rendered_fb.is_postpass()).flat_map(|x| x.commands).collect_vec();
+			let mut passes = Vec::new()
+		}*/
 		let mut passes = Vec::new();
 		let mut resolved_labels = resolved.render_blocks;
 		while !resolved_labels.is_empty()

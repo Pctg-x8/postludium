@@ -6,7 +6,6 @@
 extern crate itertools;
 
 use interlude::ffi::*;
-use interlude::traits::*;
 use std::fs::File;
 use std::io::BufReader;
 use itertools::Itertools;
@@ -530,11 +529,11 @@ impl DevConfImages
 		let image_prealloc_with_moving = interlude::ImagePreallocator::new().image_1d(image_descriptor_refs_1d).image_2d(image_descriptor_refs_2d).image_3d(image_descriptor_refs_3d);
 		let (backbuffers, staging_images) = Unrecoverable!(engine.create_double_image(&image_prealloc_with_moving));
 		let image_views_1d = images_1d.iter().enumerate().map(|(nr, &(format, _, _, _, component_map))|
-			Unrecoverable!(interlude::ImageView1D::new(engine, &backbuffers.dim1vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
+			Unrecoverable!(engine.create_image_view_1d(&backbuffers.dim1vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
 		let image_views_2d = images_2d.iter().enumerate().map(|(nr, &(format, _, _, _, component_map))|
-			Unrecoverable!(interlude::ImageView2D::new(engine, &backbuffers.dim2vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
+			Unrecoverable!(engine.create_image_view_2d(&backbuffers.dim2vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
 		let image_views_3d = images_3d.iter().enumerate().map(|(nr, &(format, _, _, _, component_map))|
-			Unrecoverable!(interlude::ImageView3D::new(engine, &backbuffers.dim3vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
+			Unrecoverable!(engine.create_image_view_3d(&backbuffers.dim3vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
 
 		let sampler_objects = samplers.iter().map(|dcs|
 		{
