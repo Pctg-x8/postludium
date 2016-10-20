@@ -152,6 +152,7 @@ lazy_static!
 {
 	static ref CSTR_SAMPLED: Vec<char> = "Sampled".chars().collect();
 	static ref CSTR_COLORATTACHMENT: Vec<char> = "ColorAttachment".chars().collect();
+	static ref CSTR_INPUTATTACHMENT: Vec<char> = "InputAttachment".chars().collect();
 	static ref CSTR_DEVICELOCAL: Vec<char> = "DeviceLocal".chars().collect();
 }
 pub fn parse_image_usage_flags(args: &[char], agg_usage: VkImageUsageFlags, device_local_flag: bool) -> DevConfParsingResult<(VkImageUsageFlags, bool)>
@@ -166,6 +167,7 @@ pub fn parse_image_usage_flags(args: &[char], agg_usage: VkImageUsageFlags, devi
 		{
 			&**CSTR_SAMPLED => (VK_IMAGE_USAGE_SAMPLED_BIT, false),
 			&**CSTR_COLORATTACHMENT => (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, false),
+			&**CSTR_INPUTATTACHMENT => (VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT, false),
 			&**CSTR_DEVICELOCAL => (0, true)
 		});
 
