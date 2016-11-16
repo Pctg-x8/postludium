@@ -1,9 +1,8 @@
 // ParseTools for reference to slice of char
 
-#![allow(unsized_in_tuple)]
 use std;
 
-pub trait ParseTools
+pub trait ParseTools : std::marker::Sized
 {
 	type Item;
 	fn skip_while<F>(self, pred: F) -> Self where F: Fn(Self::Item) -> bool;

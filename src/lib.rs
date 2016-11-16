@@ -458,7 +458,7 @@ pub struct DevConfImagesWithStaging
 }
 impl DevConfImages
 {
-	pub fn from_file(engine: &interlude::Engine, asset_path: &str, screen_size: VkExtent2D, screen_format: VkFormat) -> Self
+	pub fn from_file<Engine: interlude::EngineCore>(engine: &Engine, asset_path: &str, screen_size: VkExtent2D, screen_format: VkFormat) -> Self
 	{
 		let path = engine.parse_asset(asset_path, "pdc");
 		info!(target: "Postludium", "Parsing Device Configuration {:?}...", path);
