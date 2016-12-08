@@ -104,6 +104,7 @@ lazy_static!
 	static ref VAR_SCREEN_FORMAT: Vec<char>			= "$ScreenFormat".chars().collect();
 	static ref CSTR_BLOCKCOMPRESSION_4: Vec<char>	= "BlockCompression4".chars().collect();
 	static ref CSTR_BLOCKCOMPRESSION_5: Vec<char>	= "BlockCompression5".chars().collect();
+	static ref CSTR_R8: Vec<char>					= "R8".chars().collect();
 	static ref CSTR_R8G8: Vec<char>					= "R8G8".chars().collect();
 	static ref CSTR_R8G8B8A8: Vec<char>				= "R8G8B8A8".chars().collect();
 	static ref CSTR_R16G16B16A16: Vec<char>			= "R16G16B16A16".chars().collect();
@@ -121,6 +122,11 @@ pub fn parse_image_format(args: &[char], screen_format: VkFormat) -> DevConfPars
 		let (element_type, _) = rest.skip_while(is_ignored).take_while(not_ignored);
 		DevConfParsingResult::wrap(PartialEqualityMatchMap!(bit_arrange;
 		{
+			&**CSTR_R8 => PartialEqualityMatchMap!(element_type;
+			{
+				&**CSTR_UNORM => VkFormat::R8_UNORM,
+				&**CSTR_SNORM => VkFormat::R8_SNORM
+			}),
 			&**CSTR_R8G8 => PartialEqualityMatchMap!(element_type;
 			{
 				&**CSTR_UNORM => VkFormat::R8G8_UNORM
