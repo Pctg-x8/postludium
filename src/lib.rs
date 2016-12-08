@@ -5,6 +5,7 @@
 #[macro_use] extern crate log;
 extern crate itertools;
 
+use interlude::*;
 use interlude::ffi::*;
 use std::fs::File;
 use std::io::BufReader;
@@ -184,7 +185,7 @@ lazy_static!
 	static ref VAR_SCREEN_WIDTH: Vec<char> = "$ScreenWidth".chars().collect();
 	static ref VAR_SCREEN_HEIGHT: Vec<char> = "$ScreenHeight".chars().collect();
 }
-pub fn parse_image_extent(args: &[char], dims: ImageDimensions, screen_size: VkExtent2D) -> DevConfParsingResult<VkExtent3D>
+pub fn parse_image_extent(args: &[char], dims: ImageDimensions, screen_size: &Size2) -> DevConfParsingResult<Size3>
 {
 	let parse_arg = |input: &[char]| PartialEqualityMatchMap!(input;
 	{
@@ -193,13 +194,13 @@ pub fn parse_image_extent(args: &[char], dims: ImageDimensions, screen_size: VkE
 	});
 	DevConfParsingResult::from(match dims
 	{
-		ImageDimensions::Single => parse_arg(args.take_while(not_ignored).0).map(|val| VkExtent3D(val, 1, 1)),
+		ImageDimensions::Single => parse_arg(args.take_while(not_ignored).0).map(|val| Size3(val, 1, 1)),
 		ImageDimensions::Double =>
 		{
 			let (wstr, rest) = args.take_while(not_ignored);
 			let (hstr, _) = rest.skip_while(is_ignored).take_while(not_ignored);
 
-			parse_arg(wstr).and_then(|w| parse_arg(hstr).map(move |h| VkExtent3D(w, h, 1)))
+			parse_arg(wstr).and_then(|w| parse_arg(hstr).map(move |h| Size3(w, h, 1)))
 		},
 		ImageDimensions::Triple =>
 		{
@@ -207,7 +208,7 @@ pub fn parse_image_extent(args: &[char], dims: ImageDimensions, screen_size: VkE
 			let (hstr, rest) = rest.skip_while(is_ignored).take_while(not_ignored);
 			let (dstr, _) = rest.skip_while(is_ignored).take_while(not_ignored);
 
-			parse_arg(wstr).and_then(|w| parse_arg(hstr).and_then(move |h| parse_arg(dstr).map(move |d| VkExtent3D(w, h, d))))
+			parse_arg(wstr).and_then(|w| parse_arg(hstr).and_then(move |h| parse_arg(dstr).map(move |d| Size3(w, h, d))))
 		}
 	})
 }
@@ -272,7 +273,7 @@ lazy_static!
 	static ref CSTR_USAGE: Vec<char> = "Usage".chars().collect();
 	static ref CSTR_COMPONENTMAP: Vec<char> = "ComponentMap".chars().collect();
 }
-pub fn parse_configuration_image<LinesT: LazyLines>(lines_iter: &mut LinesT, screen_size: VkExtent2D, screen_format: VkFormat) -> DevConfImage
+pub fn parse_configuration_image<LinesT: LazyLines>(lines_iter: &mut LinesT, screen_size: &Size2, screen_format: VkFormat) -> DevConfImage
 {
 	let (headline, dim) =
 	{
@@ -318,7 +319,7 @@ pub fn parse_configuration_image<LinesT: LazyLines>(lines_iter: &mut LinesT, scr
 		ImageDimensions::Double => DevConfImage::Dim2
 		{
 			format: format.expect(&format!("Format parameter is not presented at line {}", headline)),
-			extent: VkExtent2D::from(extent.expect(&format!("Extent parameter is not presented at line {}", headline))),
+			extent: Size2::from(extent.expect(&format!("Extent parameter is not presented at line {}", headline))),
 			usage: usage, device_local: devlocal, component_map: component_map
 		},
 		ImageDimensions::Triple => DevConfImage::Dim3
@@ -388,13 +389,13 @@ mod test
 	}
 	#[test] fn parse_image_extents()
 	{
-		assert_eq!(parse_image_extent(&"640".chars().collect::<Vec<_>>(), ImageDimensions::Single, VkExtent2D(1920, 1080)).unwrap(), VkExtent3D(640, 1, 1));
-		assert_eq!(parse_image_extent(&"640 480".chars().collect::<Vec<_>>(), ImageDimensions::Double, VkExtent2D(1920, 1080)).unwrap(), VkExtent3D(640, 480, 1));
-		assert_eq!(parse_image_extent(&"640 480 16".chars().collect::<Vec<_>>(), ImageDimensions::Triple, VkExtent2D(1920, 1080)).unwrap(), VkExtent3D(640, 480, 16));
-		assert_eq!(parse_image_extent(&"$ScreenWidth $ScreenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, VkExtent2D(1920, 1080)).unwrap(), VkExtent3D(1920, 1080, 1));
-		assert_eq!(parse_image_extent(&"640 $ScreenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, VkExtent2D(1920, 1080)).unwrap(), VkExtent3D(640, 1080, 1));
-		assert!(parse_image_extent(&"$screenwidth $screenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, VkExtent2D(1920, 1080)).is_numeric_parsing_failed());
-		assert!(parse_image_extent(&"$screenwidth aaa".chars().collect::<Vec<_>>(), ImageDimensions::Double, VkExtent2D(1920, 1080)).is_numeric_parsing_failed());
+		assert_eq!(parse_image_extent(&"640".chars().collect::<Vec<_>>(), ImageDimensions::Single, &Size2(1920, 1080)).unwrap(), Size3(640, 1, 1));
+		assert_eq!(parse_image_extent(&"640 480".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 1));
+		assert_eq!(parse_image_extent(&"640 480 16".chars().collect::<Vec<_>>(), ImageDimensions::Triple, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 16));
+		assert_eq!(parse_image_extent(&"$ScreenWidth $ScreenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(1920, 1080, 1));
+		assert_eq!(parse_image_extent(&"640 $ScreenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 1080, 1));
+		assert!(parse_image_extent(&"$screenwidth $screenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
+		assert!(parse_image_extent(&"$screenwidth aaa".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
 	}
 	#[test] fn parse_filter_types()
 	{
@@ -407,13 +408,13 @@ mod test
 	{
 		let testcase = "Image 2D\n- Format: R8G8B8A8 UNORM\n- Extent: $ScreenWidth $ScreenHeight\n- Usage: Sampled / ColorAttachment\nImage 2D".to_owned();
 		let mut testcase_wrap = LazyLinesStr::new(&testcase);
-		let img = parse_configuration_image(&mut testcase_wrap, VkExtent2D(640, 480), VkFormat::R8G8B8A8_UNORM);
+		let img = parse_configuration_image(&mut testcase_wrap, &Size2(640, 480), VkFormat::R8G8B8A8_UNORM);
 		match img
 		{
 			DevConfImage::Dim2 { format, extent, usage, device_local, .. } =>
 			{
 				assert_eq!(format, VkFormat::R8G8B8A8_UNORM);
-				assert_eq!(extent, VkExtent2D(640, 480));
+				assert_eq!(extent, Size2(640, 480));
 				assert_eq!(usage, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 				assert_eq!(device_local, false);
 			},
@@ -439,8 +440,8 @@ enum NextInstruction
 pub enum DevConfImage
 {
 	Dim1 { format: VkFormat, extent: u32, usage: VkImageUsageFlags, device_local: bool, component_map: interlude::ComponentMapping },
-	Dim2 { format: VkFormat, extent: VkExtent2D, usage: VkImageUsageFlags, device_local: bool, component_map: interlude::ComponentMapping },
-	Dim3 { format: VkFormat, extent: VkExtent3D, usage: VkImageUsageFlags, device_local: bool, component_map: interlude::ComponentMapping }
+	Dim2 { format: VkFormat, extent: Size2, usage: VkImageUsageFlags, device_local: bool, component_map: interlude::ComponentMapping },
+	Dim3 { format: VkFormat, extent: Size3, usage: VkImageUsageFlags, device_local: bool, component_map: interlude::ComponentMapping }
 }
 #[derive(Debug)]
 pub struct DevConfSampler { mag_filter: interlude::Filter, min_filter: interlude::Filter }
@@ -454,11 +455,11 @@ pub struct DevConfImagesWithStaging
 {
 	image_views_1d: Vec<interlude::ImageView1D>, image_views_2d: Vec<interlude::ImageView2D>, image_views_3d: Vec<interlude::ImageView3D>,
 	samplers: Vec<interlude::Sampler>,
-	device_images: interlude::DeviceImage, staging_images: interlude::StagingImage
+	#[allow(dead_code)] device_images: interlude::DeviceImage, staging_images: interlude::StagingImage
 }
 impl DevConfImages
 {
-	pub fn from_file<Engine: interlude::EngineCore>(engine: &Engine, asset_path: &str, screen_size: VkExtent2D, screen_format: VkFormat) -> Self
+	pub fn from_file<Engine: interlude::EngineCore>(engine: &Engine, asset_path: &str, screen_size: &Size2, screen_format: VkFormat) -> Self
 	{
 		let path = engine.parse_asset(asset_path, "pdc");
 		info!(target: "Postludium", "Parsing Device Configuration {:?}...", path);
@@ -498,14 +499,14 @@ impl DevConfImages
 			{
 				&DevConfImage::Dim1 { format, extent, usage, device_local: true, .. } => { image_descriptors1.entry((format, extent, usage, true))
 					.or_insert(interlude::ImageDescriptor1::new(format, extent, usage).device_resource()); },
-				&DevConfImage::Dim2 { format, extent, usage, device_local: true, .. } => { image_descriptors2.entry((format, extent, usage, true))
-					.or_insert(interlude::ImageDescriptor2::new(format, extent, usage).device_resource()); },
+				&DevConfImage::Dim2 { format, ref extent, usage, device_local: true, .. } => { image_descriptors2.entry((format, extent, usage, true))
+					.or_insert(interlude::ImageDescriptor2::new(format, extent.clone(), usage).device_resource()); },
 				&DevConfImage::Dim1 { format, extent, usage, device_local: false, .. } => { image_descriptors1.entry((format, extent, usage, false))
 					.or_insert(interlude::ImageDescriptor1::new(format, extent, usage)); },
-				&DevConfImage::Dim2 { format, extent, usage, device_local: false, .. } => { image_descriptors2.entry((format, extent, usage, false))
-					.or_insert(interlude::ImageDescriptor2::new(format, extent, usage)); },
-				&DevConfImage::Dim3 { format, extent, usage, .. } => { image_descriptors3.entry((format, extent, usage, false))
-					.or_insert(interlude::ImageDescriptor3::new(format, extent, usage)); }
+				&DevConfImage::Dim2 { format, ref extent, usage, device_local: false, .. } => { image_descriptors2.entry((format, extent, usage, false))
+					.or_insert(interlude::ImageDescriptor2::new(format, extent.clone(), usage)); },
+				&DevConfImage::Dim3 { format, ref extent, usage, .. } => { image_descriptors3.entry((format, extent, usage, false))
+					.or_insert(interlude::ImageDescriptor3::new(format, extent.clone(), usage)); }
 			}
 		}
 
@@ -516,12 +517,12 @@ impl DevConfImages
 		}).collect_vec();
 		let images_2d = images.iter().filter_map(|img| match img
 		{
-			&DevConfImage::Dim2 { format, extent, usage, device_local, component_map } => Some((format, extent, usage, device_local, component_map)),
+			&DevConfImage::Dim2 { format, ref extent, usage, device_local, component_map } => Some((format, extent, usage, device_local, component_map)),
 			_ => None
 		}).collect_vec();
 		let images_3d = images.iter().filter_map(|img| match img
 		{
-			&DevConfImage::Dim3 { format, extent, usage, device_local, component_map } => Some((format, extent, usage, device_local, component_map)),
+			&DevConfImage::Dim3 { format, ref extent, usage, device_local, component_map } => Some((format, extent, usage, device_local, component_map)),
 			_ => None
 		}).collect_vec();
 
