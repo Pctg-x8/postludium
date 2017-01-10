@@ -2,6 +2,9 @@
 
 use std;
 
+/// line, column
+pub struct Location(usize, usize);
+
 pub trait ParseTools : std::marker::Sized
 {
 	type Item;

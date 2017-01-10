@@ -18,6 +18,8 @@ pub mod gcasm;
 mod lazylines;
 use self::lazylines::*;
 
+mod devconf;
+
 #[derive(Clone)]
 pub enum DevConfParsingResult<T: Clone>
 {
