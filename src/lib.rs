@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::BufReader;
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 #[macro_use] mod parsetools;
 use self::parsetools::ParseTools;
@@ -467,7 +468,8 @@ pub struct DevConfImagesWithStaging
 }
 impl DevConfImages
 {
-	pub fn from_file<Engine: interlude::EngineCore>(engine: &Engine, asset_path: &str, screen_size: &Size2, screen_format: VkFormat) -> Self
+	pub fn from_file<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(engine: &Engine, asset_path: &str, screen_size: &Size2, screen_format: VkFormat)
+		-> Self
 	{
 		let path = engine.parse_asset(asset_path, "pdc");
 		info!(target: "Postludium", "Parsing Device Configuration {:?}...", path);
@@ -506,15 +508,15 @@ impl DevConfImages
 			match img
 			{
 				&DevConfImage::Dim1 { format, extent, usage, device_local: true, .. } => { image_descriptors1.entry((format, extent, usage, true))
-					.or_insert(interlude::ImageDescriptor1::new(format, extent, usage).device_resource()); },
+					.or_insert(ImageDescriptor1::new(format, extent, usage).device_local()); },
 				&DevConfImage::Dim2 { format, ref extent, usage, device_local: true, .. } => { image_descriptors2.entry((format, extent, usage, true))
-					.or_insert(interlude::ImageDescriptor2::new(format, extent.clone(), usage).device_resource()); },
+					.or_insert(ImageDescriptor2::new(format, extent.clone(), usage).device_local()); },
 				&DevConfImage::Dim1 { format, extent, usage, device_local: false, .. } => { image_descriptors1.entry((format, extent, usage, false))
-					.or_insert(interlude::ImageDescriptor1::new(format, extent, usage)); },
+					.or_insert(ImageDescriptor1::new(format, extent, usage)); },
 				&DevConfImage::Dim2 { format, ref extent, usage, device_local: false, .. } => { image_descriptors2.entry((format, extent, usage, false))
-					.or_insert(interlude::ImageDescriptor2::new(format, extent.clone(), usage)); },
+					.or_insert(ImageDescriptor2::new(format, extent.clone(), usage)); },
 				&DevConfImage::Dim3 { format, ref extent, usage, .. } => { image_descriptors3.entry((format, extent, usage, false))
-					.or_insert(interlude::ImageDescriptor3::new(format, extent.clone(), usage)); }
+					.or_insert(ImageDescriptor3::new(format, extent.clone(), usage)); }
 			}
 		}
 
@@ -537,19 +539,19 @@ impl DevConfImages
 		let image_descriptor_refs_1d = images_1d.iter().map(|&(format, extent, usage, device_local, _)| image_descriptors1.get(&(format, extent, usage, device_local)).unwrap()).collect_vec();
 		let image_descriptor_refs_2d = images_2d.iter().map(|&(format, extent, usage, device_local, _)| image_descriptors2.get(&(format, extent, usage, device_local)).unwrap()).collect_vec();
 		let image_descriptor_refs_3d = images_3d.iter().map(|&(format, extent, usage, _, _)| image_descriptors3.get(&(format, extent, usage, false)).unwrap()).collect_vec();
-		let image_prealloc_with_moving = interlude::ImagePreallocator::new().image_1d(image_descriptor_refs_1d).image_2d(image_descriptor_refs_2d).image_3d(image_descriptor_refs_3d);
-		let (backbuffers, staging_images) = Unrecoverable!(engine.create_double_image(&image_prealloc_with_moving));
+		let image_prealloc_with_moving = ImagePreallocator::new(engine, image_descriptor_refs_1d, image_descriptor_refs_2d, image_descriptor_refs_3d);
+		let (backbuffers, staging_images) = Unrecoverable!(image_prealloc_with_moving.instantiate());
 		let image_views_1d = images_1d.iter().enumerate().map(|(nr, &(format, _, _, _, component_map))|
-			Unrecoverable!(engine.create_image_view_1d(&backbuffers.dim1vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
+			Unrecoverable!(ImageView1D::make_from(&backbuffers.dim1vec()[nr], format, component_map, ImageSubresourceRange::base_color()))).collect_vec();
 		let image_views_2d = images_2d.iter().enumerate().map(|(nr, &(format, _, _, _, component_map))|
-			Unrecoverable!(engine.create_image_view_2d(&backbuffers.dim2vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
+			Unrecoverable!(ImageView2D::make_from(&backbuffers.dim2vec()[nr], format, component_map, ImageSubresourceRange::base_color()))).collect_vec();
 		let image_views_3d = images_3d.iter().enumerate().map(|(nr, &(format, _, _, _, component_map))|
-			Unrecoverable!(engine.create_image_view_3d(&backbuffers.dim3vec()[nr], format, component_map, interlude::ImageSubresourceRange::base_color()))).collect_vec();
+			Unrecoverable!(ImageView3D::make_from(&backbuffers.dim3vec()[nr], format, component_map, ImageSubresourceRange::base_color()))).collect_vec();
 
 		let sampler_objects = samplers.iter().map(|dcs|
 		{
-			let sampler_state = interlude::SamplerState::new().filters(dcs.mag_filter, dcs.min_filter);
-			Unrecoverable!(engine.create_sampler(&sampler_state))
+			let sampler_state = SamplerState::new().filters(dcs.mag_filter, dcs.min_filter);
+			Unrecoverable!(Sampler::new(engine, &sampler_state))
 		}).collect_vec();
 
 		DevConfImages
