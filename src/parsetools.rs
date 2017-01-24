@@ -7,20 +7,25 @@ pub struct Location(usize, usize);
 
 pub trait ParseTools : std::marker::Sized
 {
-	type Item;
-	fn skip_while<F>(self, pred: F) -> Self where F: Fn(Self::Item) -> bool;
-	fn take_while<F>(self, pred: F) -> (Self, Self) where F: Fn(Self::Item) -> bool;
-	fn is_front_of(&self, t: Self::Item) -> bool;
-	fn is_front<F>(&self, pred: F) -> bool where F: FnOnce(&Self::Item) -> bool;
+	fn front(&self) -> Option<char>;
+	fn peek(&self, offset: usize) -> Option<char>;
+	fn skip_while<F>(self, pred: F) -> Self where F: Fn(char) -> bool;
+	fn take_while<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool;
 	fn drop(self, count: usize) -> Self;
-	fn clone_as_string(self) -> String;
+	fn clone_as_string_mapping<F>(self, map: F) -> String where F: Fn(&char) -> char;
+	fn clone_as_string_flatmapping<F, I>(self, map: F) -> String where F: Fn(&char) -> I, I: Iterator<Item = char>;
+	fn starts_with(&self, target: &[char]) -> bool;
 
-	fn take_until<F>(self, pred: F) -> (Self, Self) where F: Fn(Self::Item) -> bool;
-	fn skip_until<F>(self, pred: F) -> Self where F: Fn(Self::Item) -> bool;
+	fn is_front_of(&self, t: char) -> bool { self.is_front(move |c| c == t) }
+	fn is_front<F>(&self, pred: F) -> bool where F: FnOnce(char) -> bool { self.front().map(pred).unwrap_or(false) }
+	fn take_until<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool { self.take_while(move |c| !pred(c)) }
+	fn skip_until<F>(self, pred: F) -> Self where F: Fn(char) -> bool { self.skip_while(move |c| !pred(c)) }
+	fn clone_as_string(self) -> String { self.clone_as_string_mapping(char::clone) }
 }
 impl<'a> ParseTools for &'a [char]
 {
-	type Item = char;
+	fn front(&self) -> Option<char> { if self.is_empty() { None } else { Some(self[0]) } }
+	fn peek(&self, offset: usize) -> Option<char> { if self.len() >= offset { None } else { Some(self[offset]) } }
 	fn skip_while<F>(self, pred: F) -> Self where F: Fn(char) -> bool
 	{
 		if !self.is_empty() && pred(self[0]) { Self::skip_while(&self[1..], pred) } else { self }
@@ -35,12 +40,9 @@ impl<'a> ParseTools for &'a [char]
 		(&self[..len], &self[len..])
 	}
 	fn drop(self, count: usize) -> Self { &self[std::cmp::min(count, self.len())..] }
-	fn is_front_of(&self, t: char) -> bool { !self.is_empty() && self[0] == t }
-	fn is_front<F>(&self, pred: F) -> bool where F: FnOnce(&Self::Item) -> bool { !self.is_empty() && pred(&self[0]) }
-	fn clone_as_string(self) -> String { self.into_iter().cloned().collect() }
-
-	fn take_until<F>(self, pred: F) -> (Self, Self) where F: Fn(Self::Item) -> bool { self.take_while(|x| !pred(x)) }
-	fn skip_until<F>(self, pred: F) -> Self where F: Fn(Self::Item) -> bool { self.skip_while(|x| !pred(x)) }
+	fn clone_as_string_mapping<F>(self, map: F) -> String where F: Fn(&char) -> char { self.into_iter().map(map).collect() }
+	fn clone_as_string_flatmapping<F, I>(self, map: F) -> String where F: Fn(&char) -> I, I: Iterator<Item = char> { self.into_iter().flat_map(map).collect() }
+	fn starts_with(&self, target: &[char]) -> bool { self.len() >= target.len() && &self[..target.len()] == target }
 }
 
 macro_rules! PartialEqualityMatchMap

@@ -12,23 +12,24 @@ use std::io::BufReader;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::borrow::Cow;
+use std::io::prelude::*;
 
 #[macro_use] mod parsetools;
 use self::parsetools::ParseTools;
-pub mod gcasm;
 mod lazylines;
 use self::lazylines::*;
 
 mod devconf;
 
 #[derive(Clone)]
-pub enum DevConfParsingResult<T: Clone>
+pub enum DevConfParsingResult<T>
 {
 	Ok(T), NumericParseError(std::num::ParseIntError),
 	InvalidFormatError, InvalidUsageFlagError(String), InvalidFilterError(String),
-	UnsupportedDimension, UnsupportedParameter(String), InvalidSwizzle
+	UnsupportedDimension, UnsupportedParameter(Cow<'static, str>), InvalidSwizzle, UnknownConfiguration
 }
-impl<T: Clone> DevConfParsingResult<T>
+impl<T> DevConfParsingResult<T>
 {
 	#[cfg(test)]
 	pub fn unwrap(self) -> T
@@ -42,7 +43,8 @@ impl<T: Clone> DevConfParsingResult<T>
 			DevConfParsingResult::InvalidUsageFlagError(s) => panic!("Invalid Usage Flag: {}", s),
 			DevConfParsingResult::InvalidFilterError(s) => panic!("Invalid Filter Type: {}", s),
 			DevConfParsingResult::UnsupportedDimension => panic!("Unsupported Image Dimension"),
-			DevConfParsingResult::UnsupportedParameter(dep) => panic!("Unsupported Parameter for {}", dep)
+			DevConfParsingResult::UnsupportedParameter(dep) => panic!("Unsupported Parameter for {}", dep),
+			DevConfParsingResult::UnknownConfiguration => panic!("Unknown Configuration")
 		}
 	}
 	pub fn unwrap_on_line(self, line: usize) -> T
@@ -56,7 +58,8 @@ impl<T: Clone> DevConfParsingResult<T>
 			DevConfParsingResult::InvalidUsageFlagError(s) => panic!("Invalid Usage Flag: {} at line {}", s, line),
 			DevConfParsingResult::InvalidFilterError(s) => panic!("Invalid Filter Type: {} at line {}", s, line),
 			DevConfParsingResult::UnsupportedDimension => panic!("Unsupported Image Dimension at line {}", line),
-			DevConfParsingResult::UnsupportedParameter(dep) => panic!("Unsupported Parameter for {} at line {}", dep, line)
+			DevConfParsingResult::UnsupportedParameter(dep) => panic!("Unsupported Parameter for {} at line {}", dep, line),
+			DevConfParsingResult::UnknownConfiguration => panic!("Unknown Configuration at line {}", line)
 		}
 	}
 	#[cfg(test)]
@@ -282,39 +285,40 @@ lazy_static!
 	static ref CSTR_USAGE: Vec<char> = "Usage".chars().collect();
 	static ref CSTR_COMPONENTMAP: Vec<char> = "ComponentMap".chars().collect();
 }
-pub fn parse_configuration_image<LinesT: LazyLines>(lines_iter: &mut LinesT, screen_size: &Size2, screen_format: VkFormat) -> DevConfImage
+pub fn parse_configuration_image(lines_iter: &mut LazyLines, screen_size: &Size2, screen_format: VkFormat) -> DevConfImage
 {
 	let (headline, dim) =
 	{
-		let (headline, ref conf_head) = lines_iter.pop().unwrap();
-		assert!(conf_head.starts_with("Image"));
-		let dim_str = conf_head.chars().skip(5).skip_while(|c| is_ignored(*c)).take_while(|c| not_ignored(*c)).collect::<String>();
+		let (headline, conf_head) = lines_iter.pop().unwrap();
+		assert!(conf_head.starts_with(&"Image".chars().collect_vec()));
+		let dim_str = conf_head.drop(5).skip_while(is_ignored).take_until(is_ignored).0.clone_as_string();
 		let dim = match dim_str.as_ref()
 		{
-			"1D" => ImageDimensions::Single, "2D" => ImageDimensions::Double, "3D" => ImageDimensions::Triple, _ => DevConfParsingResult::UnsupportedDimension.unwrap_on_line(headline)
+			"1D" => ImageDimensions::Single, "2D" => ImageDimensions::Double, "3D" => ImageDimensions::Triple,
+			_ => DevConfParsingResult::UnsupportedDimension.unwrap_on_line(headline)
 		};
 
 		(headline, dim)
 	};
 
-	let (mut format, mut extent, mut usage, mut component_map) = (None, None, None, interlude::ComponentMapping::straight());
-	while let Some((paramline, ref param)) =
+	let (mut format, mut extent, mut usage, mut component_map) = (None, None, None, ComponentMapping::straight());
+	while let Some((line, pline)) = lines_iter.next()
 	{
-		let pop_next = if let Some(&(_, ref param)) = lines_iter.next() { if param.starts_with("-") { true } else { false } } else { false };
-		if pop_next { lines_iter.pop() } else { None }
-	}
-	{
-		let param_line = param.chars().skip(1).skip_while(|&c| is_ignored(c)).collect::<Vec<_>>();
-		let (param_name, rest) = (&param_line).take_while(|c| not_ignored(c) && c != ':');
-		let param_value = rest.skip_while(is_ignored).drop(1).skip_while(is_ignored);
-		PartialEqualityMatch!(param_name;
+		if pline.is_front_of('-')
 		{
-			&**CSTR_FORMAT => format = Some(parse_image_format(param_value, screen_format).unwrap_on_line(paramline)),
-			&**CSTR_EXTENT => extent = Some(parse_image_extent(param_value, dim, screen_size).unwrap_on_line(paramline)),
-			&**CSTR_USAGE => usage = Some(parse_image_usage_flags(param_value, 0, false).unwrap_on_line(paramline)),
-			&**CSTR_COMPONENTMAP => component_map = parse_component_map(param_value).unwrap_on_line(paramline);
-			_ => DevConfParsingResult::UnsupportedParameter("Image".to_owned()).unwrap_on_line(paramline)
-		});
+			lines_iter.drop_line();
+			let (name, rest) = pline.drop(1).skip_while(is_ignored).take_while(|c| not_ignored(c) && c != ':');
+			let value = rest.skip_while(is_ignored).drop(1).skip_while(is_ignored);
+			PartialEqualityMatch!(name;
+			{
+				&**CSTR_FORMAT => format = Some(parse_image_format(value, screen_format).unwrap_on_line(line)),
+				&**CSTR_EXTENT => extent = Some(parse_image_extent(value, dim, screen_size).unwrap_on_line(line)),
+				&**CSTR_USAGE => usage = Some(parse_image_usage_flags(value, 0, false).unwrap_on_line(line)),
+				&**CSTR_COMPONENTMAP => component_map = parse_component_map(value).unwrap_on_line(line);
+				_ => DevConfParsingResult::UnsupportedParameter("Image".into()).unwrap_on_line(line)
+			});
+		}
+		else { break; }
 	}
 	let (usage, devlocal) = usage.expect(&format!("Usage parameter is not presented at line {}", headline));
 	match dim
@@ -343,28 +347,27 @@ lazy_static!
 {
 	static ref CSTR_FILTER: Vec<char> = "Filter".chars().collect();
 }
-pub fn parse_configuration_sampler<LinesT: LazyLines>(lines_iter: &mut LinesT) -> DevConfSampler
+pub fn parse_configuration_sampler(lines_iter: &mut LazyLines) -> DevConfSampler
 {
 	{
-		let (_, ref conf_head) = lines_iter.pop().unwrap();
-		assert!(conf_head.starts_with("Sampler"));
+		let (_, conf_head) = lines_iter.pop().unwrap();
+		assert!(conf_head.starts_with(&"Sampler".chars().collect_vec()));
 	}
 
-	let (mut mag_filter, mut min_filter) = (interlude::Filter::Linear, interlude::Filter::Linear);
-	while let Some((paramline, ref param)) =
+	let (mut mag_filter, mut min_filter) = (Filter::Linear, Filter::Linear);
+	while let Some((l, s)) = lines_iter.next()
 	{
-		let pop_next = if let Some(&(_, ref param)) = lines_iter.next() { if param.starts_with("-") { true } else { false } } else { false };
-		if pop_next { lines_iter.pop() } else { None }
-	}
-	{
-		let param_line = param.chars().skip(1).skip_while(|&c| is_ignored(c)).collect::<Vec<_>>();
-		let (param_name, rest) = (&param_line).take_while(|c| not_ignored(c) && c != ':');
-		let param_value = rest.skip_while(is_ignored).drop(1).skip_while(is_ignored);
-		PartialEqualityMatch!(param_name;
+		if s.is_front_of('-')
 		{
-			&**CSTR_FILTER => { let (magf, minf) = parse_filter_type(param_value).unwrap_on_line(paramline); mag_filter = magf; min_filter = minf; };
-			_ => DevConfParsingResult::UnsupportedParameter("Sampler".to_owned()).unwrap_on_line(paramline)
-		});
+			lines_iter.pop().unwrap();
+			let (name, rest) = s.drop(1).skip_while(is_ignored).take_while(|c| not_ignored(c) && c != ':');
+			let value = rest.skip_while(is_ignored).drop(1).skip_while(is_ignored);
+			PartialEqualityMatch!(name;
+			{
+				&**CSTR_FILTER => { let (magf, minf) = parse_filter_type(value).unwrap_on_line(l); mag_filter = magf; min_filter = minf; };
+				_ => DevConfParsingResult::UnsupportedParameter("Sampler".into()).unwrap_on_line(l)
+			});
+		}
 	}
 
 	DevConfSampler
@@ -376,10 +379,11 @@ pub fn parse_configuration_sampler<LinesT: LazyLines>(lines_iter: &mut LinesT) -
 #[cfg(test)]
 mod test
 {
-	use interlude;
+	use interlude::*;
 	use interlude::ffi::*;
 	use super::*;
 	use super::lazylines::*;
+	use itertools::Itertools;
 
 	#[test] fn parse_image_formats()
 	{
@@ -408,15 +412,15 @@ mod test
 	}
 	#[test] fn parse_filter_types()
 	{
-		assert_eq!(parse_filter_type(&"Nearest ".chars().collect::<Vec<_>>()).unwrap(), (interlude::Filter::Nearest, interlude::Filter::Nearest));
-		assert_eq!(parse_filter_type(&"Linear".chars().collect::<Vec<_>>()).unwrap(), (interlude::Filter::Linear, interlude::Filter::Linear));
-		assert_eq!(parse_filter_type(&"Linear Nearest".chars().collect::<Vec<_>>()).unwrap(), (interlude::Filter::Linear, interlude::Filter::Nearest));
+		assert_eq!(parse_filter_type(&"Nearest ".chars().collect::<Vec<_>>()).unwrap(), (Filter::Nearest, Filter::Nearest));
+		assert_eq!(parse_filter_type(&"Linear".chars().collect::<Vec<_>>()).unwrap(), (Filter::Linear, Filter::Linear));
+		assert_eq!(parse_filter_type(&"Linear Nearest".chars().collect::<Vec<_>>()).unwrap(), (Filter::Linear, Filter::Nearest));
 		assert!(parse_filter_type(&"Bilinear".chars().collect::<Vec<_>>()).is_invalid_filter_type_err());
 	}
 	#[test] fn parse_image_conf()
 	{
-		let testcase = "Image 2D\n- Format: R8G8B8A8 UNORM\n- Extent: $ScreenWidth $ScreenHeight\n- Usage: Sampled / ColorAttachment\nImage 2D".to_owned();
-		let mut testcase_wrap = LazyLinesStr::new(&testcase);
+		let testcase = "Image 2D\n- Format: R8G8B8A8 UNORM\n- Extent: $ScreenWidth $ScreenHeight\n- Usage: Sampled / ColorAttachment\nImage 2D".chars().collect_vec();
+		let mut testcase_wrap = LazyLines::new(&testcase);
 		let img = parse_configuration_image(&mut testcase_wrap, &Size2(640, 480), VkFormat::R8G8B8A8_UNORM);
 		match img
 		{
@@ -429,17 +433,18 @@ mod test
 			},
 			_ => unreachable!()
 		}
-		assert_eq!(testcase_wrap.next(), Some(&(5, "Image 2D".to_owned())));
+		assert_eq!(testcase_wrap.next(), Some((5, &"Image 2D".chars().collect_vec()[..])));
 	}
 	#[test] fn parse_sampler_conf()
 	{
-		let testcase = "Sampler\n- Filter: Linear".to_owned();
-		let mut testcase_wrap = LazyLinesStr::new(&testcase);
+		let testcase = "Sampler\n- Filter: Linear".chars().collect_vec();
+		let mut testcase_wrap = LazyLines::new(&testcase);
 		let smp = parse_configuration_sampler(&mut testcase_wrap);
-		assert_eq!(smp.mag_filter, interlude::Filter::Linear);
+		assert_eq!(smp.mag_filter, Filter::Linear);
 	}
 }
 
+#[derive(Debug)]
 enum NextInstruction
 {
 	Comment, Empty, Image, Sampler
@@ -473,13 +478,15 @@ impl DevConfImages
 	{
 		let path = engine.parse_asset(asset_path, "pdc");
 		info!(target: "Postludium", "Parsing Device Configuration {:?}...", path);
-		let mut flines = LazyLinesBR::new(BufReader::new(File::open(path).unwrap()));
+		let fchars = File::open(path).and_then(|mut fp| { let mut s = String::new(); fp.read_to_string(&mut s).map(|_| s.chars().collect_vec()) }).unwrap();
+		let mut flines = LazyLines::new(&fchars);
 
 		let (mut images, mut samplers) = (Vec::new(), Vec::new());
-		while let Some(next) = flines.next().map(|&(headline, ref line)|
-			if line.is_empty() { NextInstruction::Empty } else if line.starts_with("#") { NextInstruction::Comment }
-			else if line.starts_with("Image") { NextInstruction::Image } else if line.starts_with("Sampler") { NextInstruction::Sampler }
-			else { panic!("Unknown Configuration at line {}", headline) })
+		while let Some(next) = flines.next().map(|(headline, line)| if line.is_empty() { NextInstruction::Empty }
+			else if line.is_front_of('#') { NextInstruction::Comment }
+			else if line.starts_with(&"Image".chars().collect_vec()) { NextInstruction::Image }
+			else if line.starts_with(&"Sampler".chars().collect_vec()) { NextInstruction::Sampler }
+			else { DevConfParsingResult::UnknownConfiguration.unwrap_on_line(headline) })
 		{
 			match next
 			{

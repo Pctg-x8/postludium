@@ -6,99 +6,59 @@ use std::io::BufReader;
 use std::io::prelude::*;
 use super::parsetools::ParseTools;
 
-pub trait LazyLines
+pub struct LazyLines<'a>
 {
-	fn next(&mut self) -> Option<&(usize, String)>;
-	fn pop(&mut self) -> Option<(usize, String)>;
+	source: &'a [char], current: usize, cache: Option<(usize, &'a [char])>
 }
-pub trait LazyLinesRef<'a>
-{
-	fn next(&mut self) -> Option<&(usize, &'a str)>;
-	fn pop(&mut self) -> Option<(usize, &'a str)>;
-}
-#[allow(dead_code)]
-pub struct LazyLinesStr<'a>
-{
-	iter: std::iter::Enumerate<std::str::Lines<'a>>, cache: Option<(usize, String)>
-}
-impl<'a> LazyLinesStr<'a>
-{
-	#[cfg(test)]
-	pub fn new(source: &'a String) -> Self
-	{
-		LazyLinesStr { iter: source.lines().enumerate(), cache: None }
-	}
-}
-impl<'a> LazyLines for LazyLinesStr<'a>
-{
-	fn next(&mut self) -> Option<&(usize, String)>
-	{
-		if self.cache.is_none() { self.cache = self.iter.next().map(|(u, s)| (u + 1, s.to_owned())); }
-		self.cache.as_ref()
-	}
-	fn pop(&mut self) -> Option<(usize, String)>
-	{
-		if self.cache.is_none() { self.iter.next().map(|(u, s)| (u + 1, s.to_owned())) }
-		else { std::mem::replace(&mut self.cache, None) }
-	}
-}
-pub struct LazyLinesChars<'a>
-{
-	left: &'a [char], line_count: usize, cache: Option<(usize, &'a [char])>
-}
-impl<'a> LazyLinesChars<'a>
+impl<'a> LazyLines<'a>
 {
 	pub fn new(source: &'a [char]) -> Self
 	{
-		LazyLinesChars { left: source, line_count: 1, cache: None }
+		LazyLines { source: source, current: 0, cache: None }
 	}
-	pub fn next(&mut self) -> Option<&(usize, &'a [char])>
+
+	pub fn next(&mut self) -> Option<(usize, &'a [char])>
 	{
 		if self.cache.is_none()
 		{
-			self.cache = if self.left.is_empty() { None } else
+			if self.source.is_empty() { None }
+			else
 			{
-				let (cache_ref, rest) = self.left.take_while(|c| c != '\n');
-				self.left = rest.drop(1);
-				self.line_count += 1;
-				Some((self.line_count - 1, cache_ref))
-			};
+				let (l, s) = self.source.take_until(|c| c == '\n');
+				self.source = if s.is_empty() { s } else { s.drop(1) };
+				self.current += 1;
+				self.cache = Some((self.current, l));
+				self.cache.clone()
+			}
 		}
-		self.cache.as_ref()
+		else { self.cache.clone() }
 	}
 	pub fn pop(&mut self) -> Option<(usize, &'a [char])>
 	{
 		if self.cache.is_none()
 		{
-			if self.left.is_empty() { None } else
+			if self.source.is_empty() { None }
+			else
 			{
-				let (cache_ref, rest) = self.left.take_while(|c| c != '\n');
-				self.left = rest.drop(1);
-				self.line_count += 1;
-				Some((self.line_count - 1, cache_ref))
+				let (l, s) = self.source.take_until(|c| c == '\n');
+				self.source = if s.is_empty() { s } else { s.drop(1) };
+				self.current += 1;
+				Some((self.current, l))
 			}
 		}
-		else { std::mem::replace(&mut self.cache, None) }
+		else { self.cache.take() }
 	}
-}
-pub struct LazyLinesBR
-{
-	iter: std::iter::Enumerate<std::io::Lines<BufReader<File>>>, cache: Option<(usize, String)>
-}
-impl LazyLinesBR
-{
-	pub fn new(reader: BufReader<File>) -> Self { LazyLinesBR { iter: reader.lines().enumerate(), cache: None } }
-}
-impl LazyLines for LazyLinesBR
-{
-	fn next(&mut self) -> Option<&(usize, String)>
+	pub fn drop_line(&mut self)
 	{
-		if self.cache.is_none() { self.cache = self.iter.next().map(|(u, s)| (u + 1, s.unwrap())); }
-		self.cache.as_ref()
-	}
-	fn pop(&mut self) -> Option<(usize, String)>
-	{
-		if self.cache.is_none() { self.iter.next().map(|(u, s)| (u + 1, s.unwrap())) }
-		else { std::mem::replace(&mut self.cache, None) }
+		if self.cache.is_none()
+		{
+			if !self.source.is_empty()
+			{
+				let (l, s) = self.source.take_until(|c| c == '\n');
+				self.source = if s.is_empty() { s } else { s.drop(1) };
+				self.current += 1;
+			}
+		}
+		else { self.cache = None; }
 	}
 }
