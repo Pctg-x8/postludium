@@ -2,9 +2,6 @@
 
 use std;
 
-/// line, column
-pub struct Location(usize, usize);
-
 pub trait ParseTools : std::marker::Sized
 {
 	fn front(&self) -> Option<char>;

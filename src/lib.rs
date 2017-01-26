@@ -8,7 +8,6 @@ extern crate itertools;
 use interlude::*;
 use interlude::ffi::*;
 use std::fs::File;
-use std::io::BufReader;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Deref;

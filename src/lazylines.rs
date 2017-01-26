@@ -1,10 +1,6 @@
 // Peeking with Cache
 
-use std;
-use std::fs::File;
-use std::io::BufReader;
-use std::io::prelude::*;
-use super::parsetools::ParseTools;
+use ::parsetools::ParseTools;
 
 pub struct LazyLines<'a>
 {
@@ -54,7 +50,7 @@ impl<'a> LazyLines<'a>
 		{
 			if !self.source.is_empty()
 			{
-				let (l, s) = self.source.take_until(|c| c == '\n');
+				let (_, s) = self.source.take_until(|c| c == '\n');
 				self.source = if s.is_empty() { s } else { s.drop(1) };
 				self.current += 1;
 			}
