@@ -19,7 +19,7 @@ use self::parsetools::ParseTools;
 mod lazylines;
 use self::lazylines::*;
 
-// mod devconf;
+mod devconf;
 
 #[derive(Clone)]
 pub enum DevConfParsingResult<T>
