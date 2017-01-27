@@ -12,6 +12,12 @@ use itertools::Itertools;
 mod items;
 use self::items::*;
 
+struct Let<F: FnOnce() -> T, T>(F);
+impl<F: FnOnce() -> T, T> Let<F, T>
+{
+	fn _in<G: FnOnce(T) -> R, R>(self, f: G) -> R { f(self.0()) }
+}
+
 pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
 impl<T> std::ops::Index<usize> for NamedContents<T>
 {
@@ -23,6 +29,7 @@ impl<'a, T> std::ops::Index<&'a str> for NamedContents<T>
 	type Output = T;
 	fn index(&self, s: &'a str) -> &T { &self.1[self.0[s]] }
 }
+impl<T> std::ops::Deref for NamedContents<T> { type Target = [T]; fn deref(&self) -> &[T] { &self.1 } }
 impl<T> NamedContents<T>
 {
 	fn new() -> Self { NamedContents(HashMap::new(), Vec::new()) }
@@ -54,11 +61,21 @@ pub struct DeviceResources
 
 // Source Representations
 #[cfg_attr(test, derive(Debug, PartialEq))]
-pub struct RPAttachment { format: VkFormat, layouts: Transition<VkImageLayout>, clear_on_load: Option<bool>, preserve_content: bool }
+pub struct RPAttachment { format: PixelFormat, layouts: Transition<VkImageLayout>, clear_on_load: Option<bool>, preserve_content: bool }
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct RPSubpassDesc { color_outs: Vec<ConfigInt>, inputs: Vec<ConfigInt> }
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct RPSubpassDeps { passtrans: Transition<ConfigInt>, access_mask: Transition<VkAccessFlags>, stage_bits: VkPipelineStageFlags, by_region: bool }
+pub struct RenderPassData { attachments: NamedContents<RPAttachment>, passes: NamedContents<RPSubpassDesc>, deps: Vec<RPSubpassDeps> }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct SimpleRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PresentedRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum ExternalResourceData
+{
+	ImageView { dim: u8, refname: String }, SwapChainViews
+}
 
 #[cfg_attr(test, derive(Debug, PartialEq))] pub struct Transition<T> { from: T, to: T }
 impl<T> Transition<T>
@@ -136,12 +153,12 @@ impl<C> NamedConfigLine<C>
 	}
 }
 
-pub struct ObjectConfigArg<A> { name: String, value: A }
+pub struct ObjectConfigArg<'s> { name: String, value: &'s [char] }
 macro_rules! ParseObjectConfigArgN
 {
 	($t: ident = $n: expr) =>
 	{
-		fn $t<F>(source: &[char], argparser: F) -> Result<ObjectConfigArg<A>, ParseError> where F: FnOnce(&[char]) -> Result<A, ParseError>
+		fn $t(source: &'s [char]) -> Result<Self, ParseError>
 		{
 			use self::ParseError::*;
 
@@ -149,20 +166,19 @@ macro_rules! ParseObjectConfigArgN
 			{
 				let rest = source.drop($n).skip_while(ignore_chars);
 				let (name, rest) = rest.take_until(|c| c == ':' || ignore_chars(c));
-				let rest = rest.skip_while(ignore_chars);
-				if rest.front() != Some(':') { Err(DelimiterRequired) }
+				if name.is_empty() { Err(NameRequired) }
 				else
 				{
-					let value_s = rest.drop(1).skip_while(ignore_chars);
-					if name.is_empty() { Err(NameRequired) }
-					else { argparser(value_s).map(|a| ObjectConfigArg { name: name.iter().cloned().collect(), value: a }) }
+					let rest = rest.skip_while(ignore_chars);
+					if rest.front() != Some(':') { Err(DelimiterRequired) }
+					else { Ok(ObjectConfigArg { name: name.clone_as_string(), value: rest.drop(1).skip_while(ignore_chars) }) }
 				}
 			}
 			else { Err(UnexpectedHead) }
 		}
 	}
 }
-impl<A> ObjectConfigArg<A>
+impl<'s> ObjectConfigArg<'s>
 {
 	ParseObjectConfigArgN!(parse1 = 1);
 	ParseObjectConfigArgN!(parse2 = 2);
@@ -175,8 +191,8 @@ pub enum ParseError
 {
 	UnexpectedHead, NameRequired, UnknownDeviceResource, UnknownFormat, UnknownImageLayout, IntValueRequired,
 	UnknownRenderPassAttachmentOptions, ImageLayoutRequired, DirectionRequired, NumericParseError(std::num::ParseIntError),
-	DelimiterRequired, DefinitionOverrided, CorruptedSubpassDesc, UnknownPipelineStageFlag, UnknownAccessFlag,
-	UnknownRenderPassConfig
+	DelimiterRequired, ClosingRequired, DefinitionOverrided, CorruptedSubpassDesc, UnknownPipelineStageFlag, UnknownAccessFlag,
+	Expected(&'static str), UnknownConfig(&'static str), UnknownExternalResource, UnknownClearMode, FormatRequired
 }
 trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
 impl<T> DivergenceExt<T> for Result<T, ParseError>
@@ -188,26 +204,34 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 			Ok(t) => t,
 			Err(ParseError::UnexpectedHead) => panic!("Unexpected character at head of line {}", line),
 			Err(ParseError::NameRequired) => panic!("Name required following $ at line {}", line),
-			Err(ParseError::UnknownDeviceResource) => panic!("Unknown Device Resource is found at line {}", line),
-			Err(ParseError::UnknownFormat) => panic!("Unknown Image Format is found at line {}", line),
-			Err(ParseError::UnknownImageLayout) => panic!("Unknown Image Layout is found at line {}", line),
-			Err(ParseError::UnknownRenderPassAttachmentOptions) => panic!("Unknown Options for RenderPass Attachment is found at line {}", line),
+			Err(ParseError::UnknownDeviceResource) => panic!("Unknown Device Resource was found at line {}", line),
+			Err(ParseError::UnknownFormat) => panic!("Unknown Image Format was found at line {}", line),
+			Err(ParseError::UnknownImageLayout) => panic!("Unknown Image Layout was found at line {}", line),
+			Err(ParseError::UnknownRenderPassAttachmentOptions) => panic!("Unknown Options for RenderPass Attachment was found at line {}", line),
 			Err(ParseError::ImageLayoutRequired) => panic!("Image Layout required at line {}", line),
 			Err(ParseError::DirectionRequired) => panic!("Direction Token(->, <-, To or From) required at line {}", line),
 			Err(ParseError::DelimiterRequired) => panic!("Delimiter required at line {}", line),
+			Err(ParseError::ClosingRequired) => panic!("Closing required at line {}", line),
 			Err(ParseError::DefinitionOverrided) => panic!("Multiple definitions are found at line {}", line),
 			Err(ParseError::CorruptedSubpassDesc) => panic!("Some Error are found parsing SubpassDesc at line {}", line),
 			Err(ParseError::IntValueRequired) => panic!("Integer or ConfigRef required at line {}", line),
-			Err(ParseError::UnknownPipelineStageFlag) => panic!("Unknown Pipeline Stage Flag is found at line {}", line),
-			Err(ParseError::UnknownAccessFlag) => panic!("Unknown Access Mask Flag is found at line {}", line),
-			Err(ParseError::UnknownRenderPassConfig) => panic!("Unknown Config for RenderPass is found at line {}", line),
-			Err(ParseError::NumericParseError(n)) => panic!("NumericParseError: {} at line {}", n, line)
+			Err(ParseError::UnknownPipelineStageFlag) => panic!("Unknown Pipeline Stage Flag was found at line {}", line),
+			Err(ParseError::UnknownAccessFlag) => panic!("Unknown Access Mask Flag was found at line {}", line),
+			Err(ParseError::UnknownExternalResource) => panic!("Unknown External Resource was found at line {}", line),
+			Err(ParseError::UnknownClearMode) => panic!("Unknown Clear Mode was found at line {}", line),
+			Err(ParseError::FormatRequired) => panic!("Format required for RenderPass Attachment at line {}", line),
+			Err(ParseError::NumericParseError(n)) => panic!("NumericParseError: {} at line {}", n, line),
+			Err(ParseError::Expected(s)) => panic!("Expected {}, but it was not found at line {}", s, line),
+			Err(ParseError::UnknownConfig(s)) => panic!("Unknown Config for {} was found at line {}", s, line)
 		}
 	}
 }
 
 fn ignore_chars(c: char) -> bool { c == ' ' || c == '\t' }
-fn ident_break(c: char) -> bool { c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || ignore_chars(c) }
+fn ident_break(c: char) -> bool
+{
+	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || ignore_chars(c)
+}
 fn parse_device_resource(mut source: LazyLines)
 {
 	if let Some((l, s)) = source.pop()
@@ -234,86 +258,166 @@ fn parse_named_device_resource(current: usize, source: &[char], mut restlines: L
 }
 fn parse_unnamed_device_resource(current: usize, source: &[char], mut rest: LazyLines)
 {
-	match source.take_until(ident_break).0.clone_as_string().as_ref()
+	let (s, r) = source.take_until(ident_break);
+	match s.clone_as_string().as_ref()
 	{
-		"RenderPass" => parse_renderpass(&mut rest),
-		"SimpleRenderPass" => parse_simple_renderpass(rest),
-		"PresentedRenderPass" => parse_presented_renderpass(rest),
+		"RenderPass" => { parse_renderpass(&mut rest); },
+		"SimpleRenderPass" => { parse_simple_renderpass(current, &mut rest); },
+		"PresentedRenderPass" => { parse_presented_renderpass(current, &mut rest); },
 		"DescriptorSetLayout" => parse_descriptor_set_layout(rest),
 		"PushConstantLayout" => parse_push_constant_layout(rest),
 		"PipelineLayout" => parse_pipeline_layout(rest),
 		"DescriptorSets" => parse_descriptor_sets(rest),
 		"PipelineState" => parse_pipeline_state(current, source, rest),
+		"Extern" => { parse_extern_resources(r.skip_while(ignore_chars)).report_error(current); },
+		"Framebuffer" => { parse_framebuffer(s).report_error(current); }
 		_ => Err(ParseError::UnknownDeviceResource).report_error(current)
 	};
 }
-fn parse_renderpass(source: &mut LazyLines) -> ()
+fn parse_extern_resources(source: &[char]) -> Result<ExternalResourceData, ParseError>
 {
+	fn image_dimension(source: &[char]) -> Result<u8, ParseError>
+	{
+		if source == &['1', 'D'] { Ok(1) }
+		else if source == &['2', 'D'] { Ok(2) }
+		else if source == &['3', 'D'] { Ok(3) }
+		else { Err(ParseError::Expected("Image Dimension")) }
+	}
+
+	let (s, r) = source.take_until(ident_break);
+	match s.clone_as_string().as_ref()
+	{
+		"ImageView" => Let(|| r.skip_while(ignore_chars).take_until(ident_break))._in(|(d, r)|
+			image_dimension(d).and_then(|d| parse_string_literal(r.skip_while(ignore_chars)).map(|(rn, _)| ExternalResourceData::ImageView { dim: d, refname: rn }))
+		),
+		"SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
+		_ => Err(ParseError::UnknownExternalResource)
+	}
+}
+fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
+{
+	let mut rpd = RenderPassData { attachments: NamedContents::new(), passes: NamedContents::new(), deps: Vec::new() };
 	while let Some((l, s)) = source.next()
 	{
-		match ObjectConfigArg::parse1(s, |_| Ok(()))
+		match ObjectConfigArg::parse1(s)
 		{
 			Ok(ObjectConfigArg { name, .. }) => match name.as_ref()
 			{
-				"Attachments" =>
+				"Attachments" => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+				else
 				{
 					source.drop_line();
-					let mut attachments = NamedContents::new();
 					while let Some((l, s)) = source.next()
 					{
 						match NamedConfigLine::parse2(s, parse_rp_attachment)
 						{
-							Ok(NamedConfigLine { name: Some(name), config }) => { source.drop_line(); attachments.insert(name.into(), config); },
-							Ok(NamedConfigLine { config, .. }) => { source.drop_line(); attachments.insert_unnamed(config); },
+							Ok(NamedConfigLine { name: Some(name), config }) => { source.drop_line(); rpd.attachments.insert(name.into(), config); },
+							Ok(NamedConfigLine { config, .. }) => { source.drop_line(); rpd.attachments.insert_unnamed(config); },
 							Err(ParseError::UnexpectedHead) => break,
 							e => { e.report_error(l); }
 						}
 					}
 				},
-				"Subpasses" =>
+				"Subpasses" => if !rpd.passes.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+				else
 				{
 					source.drop_line();
-					let mut subpasses = NamedContents::new();
 					while let Some((l, s)) = source.next()
 					{
 						match NamedConfigLine::parse2(s, parse_subpass_desc)
 						{
-							Ok(NamedConfigLine { name: Some(name), config }) => { source.drop_line(); subpasses.insert(name.into(), config); },
-							Ok(NamedConfigLine { config, .. }) => { source.drop_line(); subpasses.insert_unnamed(config); },
+							Ok(NamedConfigLine { name: Some(name), config }) => { source.drop_line(); rpd.passes.insert(name.into(), config); },
+							Ok(NamedConfigLine { config, .. }) => { source.drop_line(); rpd.passes.insert_unnamed(config); },
 							Err(ParseError::UnexpectedHead) => break,
 							e => { e.report_error(l); }
 						}
 					}
 				},
-				"Dependencies" =>
+				"Dependencies" => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+				else
 				{
 					source.drop_line();
-					let mut dependencies = Vec::new();
 					while let Some((l, s)) = source.next()
 					{
 						if s.starts_with_trailing_opt(&['-'; 2], |c| c != '-')
 						{
 							match parse_subpass_deps(s.drop(2).skip_while(ignore_chars))
 							{
-								Ok(c) => { source.drop_line(); dependencies.push(c); },
+								Ok(c) => { source.drop_line(); rpd.deps.push(c); },
 								e => { e.report_error(l); }
 							}
 						}
 						else { break; }
 					}
 				},
-				_ => Err(ParseError::UnknownRenderPassConfig).report_error(l)
+				_ => Err(ParseError::UnknownConfig("RenderPass")).report_error(l)
 			},
 			Err(ParseError::UnexpectedHead) => break,
 			e => { e.report_error(l); }
 		}
 	}
+	rpd
 }
-fn parse_simple_renderpass(source: LazyLines)
+fn parse_rp_clear_mode(source: &[char]) -> Result<Option<bool>, ParseError>
 {
-	unimplemented!();
+	if source == &['N', 'o', 'n', 'e'] { Ok(None) }
+	else if source == &['O', 'n', 'L', 'o', 'a', 'd'] { Ok(Some(true)) }
+	else if source == &['P', 'r', 'e', 's', 'e', 'r', 'v', 'e'] { Ok(Some(false)) }
+	else { Err(ParseError::UnknownClearMode) }
 }
-fn parse_presented_renderpass(source: LazyLines)
+fn parse_simple_renderpass(line_in: usize, source: &mut LazyLines) -> SimpleRenderPassData
+{
+	let (mut fmt, mut clear_mode) = (None, None);
+	while let Some((l, s)) = source.next()
+	{
+		match ObjectConfigArg::parse1(s)
+		{
+			Ok(ObjectConfigArg { name, value }) => match name.as_ref()
+			{
+				"Format" => parse_pixel_format(value)
+					.and_then(|(f, _)| if fmt.is_none() { fmt = Some(f); Ok(()) } else { Err(ParseError::DefinitionOverrided) }).report_error(l),
+				"ClearMode" => { clear_mode = parse_rp_clear_mode(value).report_error(l); },
+				_ => Err(ParseError::UnknownConfig("SimpleRenderPass")).report_error(l)
+			},
+			Err(ParseError::UnexpectedHead) => break,
+			e => { e.report_error(l); }
+		}
+	}
+	if fmt.is_none() { Err(ParseError::FormatRequired).report_error(line_in) }
+	else
+	{
+		SimpleRenderPassData { format: fmt.unwrap(), clear_on_load: clear_mode }
+	}
+}
+fn parse_presented_renderpass(line_in: usize, source: &mut LazyLines) -> PresentedRenderPassData
+{
+	let (mut fmt, mut clear_mode) = (None, None);
+	while let Some((l, s)) = source.next()
+	{
+		match ObjectConfigArg::parse1(s)
+		{
+			Ok(ObjectConfigArg { name, value }) =>
+			{
+				source.drop_line();
+				match name.as_ref()
+				{
+					"Format" => parse_pixel_format(value)
+						.and_then(|(f, _)| if fmt.is_none() { fmt = Some(f); Ok(()) } else { Err(ParseError::DefinitionOverrided) }).report_error(l),
+					"ClearMode" => { clear_mode = parse_rp_clear_mode(value).report_error(l); },
+					_ => Err(ParseError::UnknownConfig("SimpleRenderPass")).report_error(l)
+				}
+			},
+			Err(ParseError::UnexpectedHead) => break,
+			e => { e.report_error(l); }
+		}
+	}
+	if fmt.is_none() { Err(ParseError::FormatRequired).report_error(line_in) }
+	else
+	{
+		PresentedRenderPassData { format: fmt.unwrap(), clear_on_load: clear_mode }
+	}
+}
+fn parse_framebuffer(source: &[char]) -> Result<(), ParseError>
 {
 	unimplemented!();
 }
@@ -498,28 +602,33 @@ fn at_token(input: &[char]) -> Option<&[char]>
 {
 	assert_eq!(parse_rp_attachment(&"R8G8B8A8 UNORM, ShaderReadOnlyOptimal <- ColorAttachmentOptimal, PreserveContent".chars().collect_vec()), Ok(RPAttachment
 	{
-		format: VkFormat::R8G8B8A8_UNORM, layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal },
+		format: PixelFormat::User(VkFormat::R8G8B8A8_UNORM),
+		layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal },
 		preserve_content: true, clear_on_load: None
 	}));
 	assert_eq!(parse_rp_attachment(&"R8G8B8A8 UNORM, ShaderReadOnlyOptimal , PreserveContent".chars().collect_vec()), Ok(RPAttachment
 	{
-		format: VkFormat::R8G8B8A8_UNORM, layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal },
+		format: PixelFormat::User(VkFormat::R8G8B8A8_UNORM),
+		layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal },
 		preserve_content: true, clear_on_load: None
 	}));
 	assert_eq!(parse_rp_attachment(&"R32 SFLOAT, ShaderReadOnlyOptimal <- ColorAttachmentOptimal".chars().collect_vec()), Ok(RPAttachment
 	{
-		format: VkFormat::R32_SFLOAT, layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal },
+		format: PixelFormat::User(VkFormat::R32_SFLOAT),
+		layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal },
 		preserve_content: false, clear_on_load: None
 	}));
 	assert_eq!(parse_rp_attachment(&"R8G8B8A8 UNORM, ShaderReadOnlyOptimal -> ColorAttachmentOptimal, ClearOnLoad".chars().collect_vec()), Ok(RPAttachment
 	{
-		format: VkFormat::R8G8B8A8_UNORM, layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ColorAttachmentOptimal },
+		format: PixelFormat::User(VkFormat::R8G8B8A8_UNORM),
+		layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ColorAttachmentOptimal },
 		preserve_content: false, clear_on_load: Some(true)
 	}));
 	assert_eq!(parse_rp_attachment(&"R8G8B8A8 SNORM, ShaderReadOnlyOptimal -> ColorAttachmentOptimal, LoadContent / PreserveContent".chars().collect_vec()),
 		Ok(RPAttachment
 		{
-			format: VkFormat::R8G8B8A8_SNORM, layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ColorAttachmentOptimal },
+			format: PixelFormat::User(VkFormat::R8G8B8A8_SNORM),
+			layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ColorAttachmentOptimal },
 			preserve_content: true, clear_on_load: Some(false)
 		}));
 	assert_eq!(parse_rp_attachment(&"R8G8B8A8 UNORM".chars().collect_vec()), Err(ParseError::DelimiterRequired));
@@ -546,4 +655,17 @@ fn at_token(input: &[char]) -> Option<&[char]>
 		access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
 		stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: true
 	}));
+}
+#[test] fn test_external_resources()
+{
+	fn test(case: &str, expect: Result<ExternalResourceData, ParseError>)
+	{
+		assert_eq!(parse_extern_resources(&case.chars().collect_vec()), expect);
+	}
+	test("ImageView 1D \"HogeResource\"", Ok(ExternalResourceData::ImageView { dim: 1, refname: "HogeResource".into() }));
+	test("ImageView 2D \"HogeResource\"", Ok(ExternalResourceData::ImageView { dim: 2, refname: "HogeResource".into() }));
+	test("ImageView 3D \"HogeResource\"", Ok(ExternalResourceData::ImageView { dim: 3, refname: "HogeResource".into() }));
+	test("SwapChainViews ", Ok(ExternalResourceData::SwapChainViews));
+	test("Framebuffer", Err(ParseError::UnknownExternalResource));
+	test("ImageView \"HogeResource\"", Err(ParseError::Expected("Image Dimension")));
 }

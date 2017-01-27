@@ -72,26 +72,38 @@ impl ConfigInt
 	assert_eq!(ConfigInt::parse_array(&['[', '1', ',']), Err(ParseError::IntValueRequired));
 }
 
-pub fn parse_pixel_format(source: &[char]) -> Result<(VkFormat, &[char]), ParseError>
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum PixelFormat { Ref(String), User(VkFormat) }
+pub fn parse_pixel_format(source: &[char]) -> Result<(PixelFormat, &[char]), ParseError>
 {
-	let (bits, rest) = source.take_until(ident_break);
-	let (form, rest) = rest.skip_while(ignore_chars).take_until(ident_break);
-	match (bits.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref(), form.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref())
+	use self::PixelFormat::*;
+
+	if source.front() == Some('$')
 	{
-		("R8", "UNORM") => Ok(VkFormat::R8_UNORM),
-		("R8", "SNORM") => Ok(VkFormat::R8_SNORM),
-		("R8G8", "UNORM") => Ok(VkFormat::R8G8_UNORM),
-		("R8G8", "SNORM") => Ok(VkFormat::R8G8_SNORM),
-		("R8G8B8", "UNORM") => Ok(VkFormat::R8G8B8_UNORM),
-		("R8G8B8", "SNORM") => Ok(VkFormat::R8G8B8_SNORM),
-		("R8G8B8A8", "UNORM") => Ok(VkFormat::R8G8B8A8_UNORM),
-		("R8G8B8A8", "SNORM") => Ok(VkFormat::R8G8B8A8_SNORM),
-		("R32", "SFLOAT") => Ok(VkFormat::R32_SFLOAT),
-		("R16G16B16A16", "UNORM") => Ok(VkFormat::R16G16B16A16_UNORM),
-		("R16G16B16A16", "SNORM") => Ok(VkFormat::R16G16B16A16_SNORM),
-		("R16G16B16A16", "SFLOAT") => Ok(VkFormat::R16G16B16A16_SFLOAT),
-		_ => Err(ParseError::UnknownFormat)
-	}.map(|f| (f, rest))
+		let (s, r) = source.drop(1).take_until(ident_break);
+		Ok((Ref(s.clone_as_string()), r))
+	}
+	else
+	{
+		let (bits, rest) = source.take_until(ident_break);
+		let (form, rest) = rest.skip_while(ignore_chars).take_until(ident_break);
+		match (bits.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref(), form.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref())
+		{
+			("R8", "UNORM") => Ok(User(VkFormat::R8_UNORM)),
+			("R8", "SNORM") => Ok(User(VkFormat::R8_SNORM)),
+			("R8G8", "UNORM") => Ok(User(VkFormat::R8G8_UNORM)),
+			("R8G8", "SNORM") => Ok(User(VkFormat::R8G8_SNORM)),
+			("R8G8B8", "UNORM") => Ok(User(VkFormat::R8G8B8_UNORM)),
+			("R8G8B8", "SNORM") => Ok(User(VkFormat::R8G8B8_SNORM)),
+			("R8G8B8A8", "UNORM") => Ok(User(VkFormat::R8G8B8A8_UNORM)),
+			("R8G8B8A8", "SNORM") => Ok(User(VkFormat::R8G8B8A8_SNORM)),
+			("R32", "SFLOAT") => Ok(User(VkFormat::R32_SFLOAT)),
+			("R16G16B16A16", "UNORM") => Ok(User(VkFormat::R16G16B16A16_UNORM)),
+			("R16G16B16A16", "SNORM") => Ok(User(VkFormat::R16G16B16A16_SNORM)),
+			("R16G16B16A16", "SFLOAT") => Ok(User(VkFormat::R16G16B16A16_SFLOAT)),
+			_ => Err(ParseError::UnknownFormat)
+		}.map(|f| (f, rest))
+	}
 }
 lazy_static!
 {
@@ -162,13 +174,45 @@ pub fn parse_access_mask(source: &[char]) -> Result<(VkAccessFlags, &[char]), Pa
 	let mut accum = 0;
 	recursive(source, &mut accum).map(|r| (accum, r))
 }
+pub fn parse_string_literal(source: &[char]) -> Result<(String, &[char]), ParseError>
+{
+	fn recursive_char<'s>(input: &'s [char], sink: &mut String) -> Result<&'s [char], ParseError>
+	{
+		match input.front()
+		{
+			Some('\\') => recursive_escape(input.drop(1), sink),
+			Some('"') => Ok(input.drop(1)),
+			Some(c) => { sink.push(c); recursive_char(input.drop(1), sink) },
+			None => Err(ParseError::ClosingRequired)
+		}
+	}
+	fn recursive_escape<'s>(input: &'s [char], sink: &mut String) -> Result<&'s [char], ParseError>
+	{
+		match input.front()
+		{
+			Some('t') => { sink.push('\t'); recursive_char(input.drop(1), sink) },
+			Some('n') => { sink.push('\n'); recursive_char(input.drop(1), sink) },
+			Some('r') => { sink.push('\r'); recursive_char(input.drop(1), sink) },
+			Some(c) => { sink.push(c); recursive_char(input.drop(1), sink) },
+			None => Err(ParseError::ClosingRequired)
+		}
+	}
+
+	if source.front() == Some('"')
+	{
+		let mut buf = String::new();
+		recursive_char(source.drop(1), &mut buf).map(|r| (buf, r))
+	}
+	else { Err(ParseError::Expected("String Literal")) }
+}
 
 #[cfg(test)] use itertools::Itertools;
 #[test] fn pixel_format()
 {
-	assert_eq!(parse_pixel_format(&"R8G8B8A8 UNORM".chars().collect_vec()), Ok((VkFormat::R8G8B8A8_UNORM, &[][..])));
-	assert_eq!(parse_pixel_format(&"R8g8B8a8 Unorm".chars().collect_vec()), Ok((VkFormat::R8G8B8A8_UNORM, &[][..])));
-	assert_eq!(parse_pixel_format(&"R8G8B8A8 UNORM,".chars().collect_vec()), Ok((VkFormat::R8G8B8A8_UNORM, &[','][..])));
+	assert_eq!(parse_pixel_format(&"R8G8B8A8 UNORM".chars().collect_vec()), Ok((PixelFormat::User(VkFormat::R8G8B8A8_UNORM), &[][..])));
+	assert_eq!(parse_pixel_format(&"R8g8B8a8 Unorm".chars().collect_vec()), Ok((PixelFormat::User(VkFormat::R8G8B8A8_UNORM), &[][..])));
+	assert_eq!(parse_pixel_format(&"R8G8B8A8 UNORM,".chars().collect_vec()), Ok((PixelFormat::User(VkFormat::R8G8B8A8_UNORM), &[','][..])));
+	assert_eq!(parse_pixel_format(&"$ScreenFormat,".chars().collect_vec()), Ok((PixelFormat::Ref("ScreenFormat".into()), &[','][..])));
 	assert_eq!(parse_pixel_format(&"R8G8B8A8 SF".chars().collect_vec()), Err(ParseError::UnknownFormat));
 }
 #[test] fn image_layout()
