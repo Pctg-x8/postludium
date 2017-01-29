@@ -24,8 +24,8 @@ macro_rules! Testing
 	}
 }
 
-#[derive(Debug, PartialEq)]
 // Integer Literal or $~~
+#[derive(Debug, PartialEq)]
 pub enum ConfigInt { Value(u32), Ref(String) }
 impl ConfigInt
 {

@@ -77,6 +77,16 @@ pub enum ExternalResourceData
 {
 	ImageView { dim: u8, refname: String }, SwapChainViews
 }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum FramebufferStyle
+{
+	WithRenderPass(ConfigInt), Simple(Option<bool>), Presented(Option<bool>)
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct FramebufferInfo
+{
+	style: FramebufferStyle, views: Vec<ConfigInt>
+}
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub enum PartialResult<'s, T>
@@ -189,7 +199,7 @@ pub enum ParseError
 	UnknownRenderPassAttachmentOptions(usize), ImageLayoutRequired(usize), DirectionRequired(usize), NumericParseError(std::num::ParseIntError, usize),
 	DelimiterRequired(usize), ClosingRequired(usize), DefinitionOverrided, CorruptedSubpassDesc(usize),
 	UnknownPipelineStageFlag(usize), UnknownAccessFlag(usize), Expected(&'static str, usize), UnknownConfig(&'static str), ConfigRequired(&'static str),
-	UnknownExternalResource(usize), UnknownClearMode(usize), FormatRequired(usize)
+	UnknownExternalResource(usize), UnknownClearMode(usize), FormatRequired(usize), UnknownObjectRef(&'static str, usize)
 }
 trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
 impl<T> DivergenceExt<T> for Result<T, ParseError>
@@ -217,6 +227,7 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 			Err(ParseError::UnknownExternalResource(p)) => panic!("Unknown External Resource was found at line {}, col {}", line, p),
 			Err(ParseError::UnknownClearMode(p)) => panic!("Unknown Clear Mode was found at line {}, col {}", line, p),
 			Err(ParseError::FormatRequired(p)) => panic!("Format required for RenderPass Attachment at line {}, col {}", line, p),
+			Err(ParseError::UnknownObjectRef(n, p)) => panic!("Unknown {} ref at line {}, col {}", n, line, p),
 			Err(ParseError::NumericParseError(n, p)) => panic!("NumericParseError: {} at line {}, col {}", n, line, p),
 			Err(ParseError::Expected(s, p)) => panic!("Expected {}, but it was not found at line {}, col {}", s, line, p),
 			Err(ParseError::UnknownConfig(s)) => panic!("Unknown Config for {} was found at line {}", s, line),
@@ -265,7 +276,7 @@ fn parse_unnamed_device_resource(current: usize, source: ParseLine, mut rest: La
 		"DescriptorSets" => parse_descriptor_sets(rest),
 		"PipelineState" => parse_pipeline_state(current, sr, rest),
 		"Extern" => { parse_extern_resources(sr.drop_while(ignore_chars)).report_error(current); },
-		"Framebuffer" => { parse_framebuffer(sr).report_error(current); }
+		"Framebuffer" => { parse_framebuffer(sr, &mut rest).report_error(current); }
 		_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(current)
 	};
 }
@@ -450,9 +461,69 @@ fn parse_presented_renderpass(line_in: usize, source: &mut LazyLines) -> Present
 		PresentedRenderPassData { format: fmt.unwrap(), clear_on_load: clear_mode }
 	}
 }
-fn parse_framebuffer(mut source: ParseLine) -> Result<(), ParseError>
+lazy_static!
 {
-	unimplemented!();
+	static ref PRESENTED: Vec<char> = "Presented".chars().collect();
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
+enum FramebufferRenderPassRef { Int(ConfigInt), Presented, None }
+fn parse_framebuffer_rp(input: ParseLine) -> PartialResult<FramebufferRenderPassRef>
+{
+	if input.front() == Some('<')
+	{
+		let r = input.drop_opt(1);
+		// Which Parameter: "Presented" / int
+		let p = if r.front().map(|c| ('0' <= c && c <= '9') || c == '$').unwrap_or(false)
+		{
+			// int
+			ConfigInt::parse(r).vmap(FramebufferRenderPassRef::Int)
+		}
+		else if r.starts_with_trailing_opt(&PRESENTED, ident_break)
+		{
+			Success(FramebufferRenderPassRef::Presented, r.drop_opt(PRESENTED.len()))
+		}
+		else { Failed(ParseError::UnknownObjectRef("RenderPass", r.current())) };
+		
+		p.and_then(|v, r|
+		{
+			let r = r.drop_while(ignore_chars);
+			if r.front() == Some('>') { Success(v, r.drop_opt(1)) } else { Failed(ParseError::ClosingRequired(r.current())) }
+		})
+	}
+	else { Success(FramebufferRenderPassRef::None, input) }
+}
+fn parse_framebuffer(rest: ParseLine, mut source: &mut LazyLines) -> Result<FramebufferInfo, ParseError>
+{
+	match parse_framebuffer_rp(rest.drop_while(ignore_chars)).and_then(|arg, r| ConfigInt::parse_array(r.drop_while(ignore_chars)).vmap(|vs| (arg, vs)))
+	{
+		Success((arg, vs), _) =>
+		{
+			let mut clear_mode = None;
+			while let Some((l, s)) = source.next()
+			{
+				if s.front() == Some('-') && s.peek(1) != Some('-')
+				{
+					source.drop_line();
+					parse_config_name(ParseLine(&s[1..], 1).drop_while(ignore_chars)).pipe_result(|name, r|
+						if name == CLEARMODE[..]
+						{
+							parse_rp_clear_mode(&r.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () })
+						}
+						else { Err(ParseError::UnknownConfig("Framebuffer")) }
+					).report_error(l)
+				}
+				else { break; }
+			}
+			let style = match arg
+			{
+				FramebufferRenderPassRef::Int(rp) => FramebufferStyle::WithRenderPass(rp),
+				FramebufferRenderPassRef::Presented => FramebufferStyle::Presented(clear_mode),
+				FramebufferRenderPassRef::None => FramebufferStyle::Simple(clear_mode)
+			};
+			Ok(FramebufferInfo { style: style, views: vs })
+		}
+		Failed(e) => Err(e)
+	}
 }
 fn parse_descriptor_set_layout(source: LazyLines)
 {
@@ -484,45 +555,45 @@ lazy_static!
 // pixel_format "," transition_opt#image_layout "," option,*
 fn parse_rp_attachment(source: ParseLine) -> Result<RPAttachment, ParseError>
 {
-	PixelFormat::parse(source).pipe_result(|format, r|
+	PixelFormat::parse(source).and_then(|format, r|
 	{
 		let r = r.drop_while(ignore_chars);
-		if r.front() != Some(',') { Err(ParseError::DelimiterRequired(r.current())) }
+		if r.front() != Some(',') { Failed(ParseError::DelimiterRequired(r.current())) }
 		else
 		{
-			Transition::parse_opt(r.drop_opt(1).drop_while(ignore_chars), parse_image_layout).pipe_result(|layouts, r|
+			Transition::parse_opt(r.drop_opt(1).drop_while(ignore_chars), parse_image_layout).vmap(|layouts| (format, layouts))
+		}
+	}).vmap(|(format, layouts)| RPAttachment { format: format, layouts: layouts, clear_on_load: None, preserve_content: false })
+	.pipe_result(|mut rpa, r|
+	{
+		let r = r.drop_while(ignore_chars);
+		if r.front() != Some(',') { Ok(rpa) }
+		else
+		{
+			fn recursive(rpa: &mut RPAttachment, source: ParseLine) -> Result<(), ParseError>
 			{
-				let mut rpa = RPAttachment { format: format, layouts: layouts, clear_on_load: None, preserve_content: false };
-				let r = r.drop_while(ignore_chars);
-				if r.front() == Some(',')
+				if source.is_empty() { Ok(()) }
+				else if source.starts_with_trailing_opt(&RPO_CLEAR_ON_LOAD, ident_break)
 				{
-					fn recursive(rpa: &mut RPAttachment, source: ParseLine) -> Result<(), ParseError>
-					{
-						if source.is_empty() { Ok(()) }
-						else if source.starts_with_trailing_opt(&RPO_CLEAR_ON_LOAD, ident_break)
-						{
-							rpa.clear_on_load = Some(true);
-							let r = source.drop_opt(RPO_CLEAR_ON_LOAD.len()).drop_while(ignore_chars);
-							if r.front() == Some('/') { recursive(rpa, r.drop_opt(1).drop_while(ignore_chars)) } else { Ok(()) }
-						}
-						else if source.starts_with_trailing_opt(&RPO_LOAD_CONTENT, ident_break)
-						{
-							rpa.clear_on_load = Some(false);
-							let r = source.drop_opt(RPO_LOAD_CONTENT.len()).drop_while(ignore_chars);
-							if r.front() == Some('/') { recursive(rpa, r.drop_opt(1).drop_while(ignore_chars)) } else { Ok(()) }
-						}
-						else if source.starts_with_trailing_opt(&RPO_PRESERVE_CONTENT, ident_break)
-						{
-							rpa.preserve_content = true;
-							let r = source.drop_opt(RPO_PRESERVE_CONTENT.len()).drop_while(ignore_chars);
-							if r.front() == Some('/') { recursive(rpa, r.drop_opt(1).drop_while(ignore_chars)) } else { Ok(()) }
-						}
-						else { Err(ParseError::UnknownRenderPassAttachmentOptions(source.current())) }
-					}
-					recursive(&mut rpa, r.drop_opt(1).drop_while(ignore_chars)).map(|_| rpa)
+					rpa.clear_on_load = Some(true);
+					let r = source.drop_opt(RPO_CLEAR_ON_LOAD.len()).drop_while(ignore_chars);
+					if r.front() == Some('/') { recursive(rpa, r.drop_opt(1).drop_while(ignore_chars)) } else { Ok(()) }
 				}
-				else { Ok(rpa) }
-			})
+				else if source.starts_with_trailing_opt(&RPO_LOAD_CONTENT, ident_break)
+				{
+					rpa.clear_on_load = Some(false);
+					let r = source.drop_opt(RPO_LOAD_CONTENT.len()).drop_while(ignore_chars);
+					if r.front() == Some('/') { recursive(rpa, r.drop_opt(1).drop_while(ignore_chars)) } else { Ok(()) }
+				}
+				else if source.starts_with_trailing_opt(&RPO_PRESERVE_CONTENT, ident_break)
+				{
+					rpa.preserve_content = true;
+					let r = source.drop_opt(RPO_PRESERVE_CONTENT.len()).drop_while(ignore_chars);
+					if r.front() == Some('/') { recursive(rpa, r.drop_opt(1).drop_while(ignore_chars)) } else { Ok(()) }
+				}
+				else { Err(ParseError::UnknownRenderPassAttachmentOptions(source.current())) }
+			}
+			recursive(&mut rpa, r.drop_opt(1).drop_while(ignore_chars)).map(|_| rpa)
 		}
 	})
 }
@@ -707,5 +778,16 @@ fn at_token(input: ParseLine) -> Option<ParseLine>
 		parse_extern_resources: "SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
 		parse_extern_resources: "Framebuffer" => Err(ParseError::UnknownExternalResource(0)),
 		parse_extern_resources: "ImageView \"HogeResource\"" => Err(ParseError::Expected("Image Dimension", 10))
+	}
+}
+#[test] fn test_framebuffer_rp()
+{
+	Testing!
+	{
+		parse_framebuffer_rp: "<$FirstRP>" => Success(FramebufferRenderPassRef::Int(ConfigInt::Ref("FirstRP".into())), ParseLine(&[], 10)),
+		parse_framebuffer_rp: "<Presented>" => Success(FramebufferRenderPassRef::Presented, ParseLine(&[], 11)),
+		parse_framebuffer_rp: "n" => Success(FramebufferRenderPassRef::None, ParseLine(&['n'], 0)),
+		parse_framebuffer_rp: "<0" => Failed(ParseError::ClosingRequired(2)),
+		parse_framebuffer_rp: "<AA>" => Failed(ParseError::UnknownObjectRef("RenderPass", 1))
 	}
 }
