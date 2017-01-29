@@ -1,235 +1,274 @@
 
 use super::ParseError;
-use parsetools::ParseTools;
+use parsetools::*;
 use interlude::ffi::*;
-use super::{ignore_chars, ident_break};
+use super::{ignore_chars, ident_break, PartialResult};
+use super::PartialResult::*;
+
+#[cfg(test)] use itertools::Itertools;
+#[cfg(test)]
+macro_rules! Testing
+{
+	{$f: path: $t: expr => $e: expr , $($r: tt)+} =>
+	{
+		Testing! { $f: $t => $e }
+		Testing! { $($r)* }
+	};
+	{$f: path: $t: expr => $e: expr ,} =>
+	{
+		Testing! { $f: $t => $e }
+	};
+	{$f: path: $t: expr => $e: expr} =>
+	{
+		assert_eq!($f(ParseLine(&$t.chars().collect_vec(), 0)), $e);
+	}
+}
 
 #[derive(Debug, PartialEq)]
 // Integer Literal or $~~
 pub enum ConfigInt { Value(u32), Ref(String) }
 impl ConfigInt
 {
-	pub fn parse(input: &[char]) -> Result<(Self, &[char]), ParseError>
+	pub fn parse(input: ParseLine) -> PartialResult<Self>
 	{
-		use super::ParseError::*;
-
 		match input.front()
 		{
 			Some('$') =>
 			{
-				let (refn, rest) = input.drop(1).take_until(ident_break);
-				if refn.is_empty() { Err(NameRequired) } else { Ok((ConfigInt::Ref(refn.iter().cloned().collect()), rest)) }
+				let (refn, rest) = input.drop_opt(1).take_until(ident_break);
+				if refn.is_empty() { Failed(ParseError::NameRequired(refn.current())) } else { Success(ConfigInt::Ref(refn.clone_as_string()), rest) }
 			},
 			Some('0' ... '9') =>
 			{
 				let (refn, rest) = input.take_while(|c| '0' <= c && c <= '9');
 				assert!(!refn.is_empty());
-				refn.iter().cloned().collect::<String>().parse::<u32>().map_err(NumericParseError).map(|n| (ConfigInt::Value(n), rest))
+				match refn.clone_as_string().parse::<u32>()
+				{
+					Ok(v) => Success(ConfigInt::Value(v), rest),
+					Err(e) => Failed(ParseError::NumericParseError(e, refn.current()))
+				}
 			},
-			_ => Err(IntValueRequired)
+			_ => Failed(ParseError::IntValueRequired(input.current()))
 		}
 	}
-	pub fn parse_array(input: &[char]) -> Result<(Vec<Self>, &[char]), ParseError>
+	pub fn parse_array(input: ParseLine) -> PartialResult<Vec<Self>>
 	{
-		use super::ParseError::*;
-		
 		if input.front() == Some('[')
 		{
-			fn recursive<'s>(input: &'s [char], sink: &mut Vec<ConfigInt>) -> Result<&'s [char], ParseError>
+			fn recursive<'s>(input: ParseLine<'s>, sink: &mut Vec<ConfigInt>) -> PartialResult<'s, ()>
 			{
-				ConfigInt::parse(input).and_then(|(v, r)|
+				ConfigInt::parse(input).and_then(|v, r|
 				{
 					sink.push(v);
-					let r = r.skip_while(ignore_chars);
-					if r.front() == Some(',')
+					let r = r.drop_while(ignore_chars);
+					match r.front()
 					{
-						let r = r.skip_while(|c| c == ',' || ignore_chars(c));
-						if r.front() == Some(']') { Ok(r.drop(1)) } else { recursive(r, sink) }
+						Some(',') =>
+						{
+							let r = r.drop_while(|c| c == ',' || ignore_chars(c));
+							if r.front() == Some(']') { Success((), r.drop_opt(1)) } else { recursive(r, sink) }
+						},
+						Some(']') => { Success((), r.drop_opt(1)) },
+						_ => Failed(ParseError::DelimiterRequired(r.current()))
 					}
-					else if r.front() == Some(']') { Ok(r.drop(1)) }
-					else { Err(DelimiterRequired) }
 				})
 			}
 			let mut v = Vec::new();
-			recursive(input.drop(1), &mut v).map(|r| (v, r))
+			recursive(input.drop_opt(1), &mut v).vmap(|_| v)
 		}
-		else
-		{
-			Self::parse(input).map(|(v, r)| (vec![v], r))
-		}
+		else { Self::parse(input).vmap(|v| vec![v]) }
 	}
 }
 #[test] fn parse_config_int()
 {
-	assert_eq!(ConfigInt::parse(&['1', '0']), Ok((ConfigInt::Value(10), &[][..])));
-	assert_eq!(ConfigInt::parse(&['$', 'T', 'A', ',']), Ok((ConfigInt::Ref("TA".into()), &[','][..])));
-	assert_eq!(ConfigInt::parse(&['$', ' ']), Err(ParseError::NameRequired));
-	assert_eq!(ConfigInt::parse(&['T']), Err(ParseError::IntValueRequired));
-	assert_eq!(ConfigInt::parse_array(&['1', '0']), Ok((vec![ConfigInt::Value(10)], &[][..])));
-	assert_eq!(ConfigInt::parse_array(&['[', '1', ',', ' ', '2', ']', '~']), Ok((vec![ConfigInt::Value(1), ConfigInt::Value(2)], &['~'][..])));
-	assert_eq!(ConfigInt::parse_array(&['[', '1', ',', ',', ']']), Ok((vec![ConfigInt::Value(1)], &[][..])));
-	assert_eq!(ConfigInt::parse_array(&['[', '1', ' ', '2', ']']), Err(ParseError::DelimiterRequired));
-	assert_eq!(ConfigInt::parse_array(&['[', '1', ',']), Err(ParseError::IntValueRequired));
+	Testing!
+	{
+		ConfigInt::parse: "10" => Success(ConfigInt::Value(10), ParseLine(&[], 2)),
+		ConfigInt::parse: "$TA," => Success(ConfigInt::Ref("TA".into()), ParseLine(&[','], 3)),
+		ConfigInt::parse: "$ " => Failed(ParseError::NameRequired(1)),
+		ConfigInt::parse: "T" => Failed(ParseError::IntValueRequired(0)),
+		ConfigInt::parse_array: "10" => Success(vec![ConfigInt::Value(10)], ParseLine(&[], 2)),
+		ConfigInt::parse_array: "[1, 2]~" => Success(vec![ConfigInt::Value(1), ConfigInt::Value(2)], ParseLine(&['~'], 6)),
+		ConfigInt::parse_array: "[1,,]" => Success(vec![ConfigInt::Value(1)], ParseLine(&[], 5)),
+		ConfigInt::parse_array: "[1 2]" => Failed(ParseError::DelimiterRequired(3)),
+		ConfigInt::parse_array: "[1," => Failed(ParseError::IntValueRequired(3))
+	}
 }
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
-pub enum PixelFormat { Ref(String), User(VkFormat) }
-pub fn parse_pixel_format(source: &[char]) -> Result<(PixelFormat, &[char]), ParseError>
+pub enum PixelFormat { Ref(String), Value(VkFormat) }
+impl PixelFormat
 {
-	use self::PixelFormat::*;
-
-	if source.front() == Some('$')
+	pub fn parse(source: ParseLine) -> PartialResult<Self>
 	{
-		let (s, r) = source.drop(1).take_until(ident_break);
-		Ok((Ref(s.clone_as_string()), r))
-	}
-	else
-	{
-		let (bits, rest) = source.take_until(ident_break);
-		let (form, rest) = rest.skip_while(ignore_chars).take_until(ident_break);
-		match (bits.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref(), form.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref())
+		if source.front() == Some('$')
 		{
-			("R8", "UNORM") => Ok(User(VkFormat::R8_UNORM)),
-			("R8", "SNORM") => Ok(User(VkFormat::R8_SNORM)),
-			("R8G8", "UNORM") => Ok(User(VkFormat::R8G8_UNORM)),
-			("R8G8", "SNORM") => Ok(User(VkFormat::R8G8_SNORM)),
-			("R8G8B8", "UNORM") => Ok(User(VkFormat::R8G8B8_UNORM)),
-			("R8G8B8", "SNORM") => Ok(User(VkFormat::R8G8B8_SNORM)),
-			("R8G8B8A8", "UNORM") => Ok(User(VkFormat::R8G8B8A8_UNORM)),
-			("R8G8B8A8", "SNORM") => Ok(User(VkFormat::R8G8B8A8_SNORM)),
-			("R32", "SFLOAT") => Ok(User(VkFormat::R32_SFLOAT)),
-			("R16G16B16A16", "UNORM") => Ok(User(VkFormat::R16G16B16A16_UNORM)),
-			("R16G16B16A16", "SNORM") => Ok(User(VkFormat::R16G16B16A16_SNORM)),
-			("R16G16B16A16", "SFLOAT") => Ok(User(VkFormat::R16G16B16A16_SFLOAT)),
-			_ => Err(ParseError::UnknownFormat)
-		}.map(|f| (f, rest))
+			let (s, rest) = source.drop_opt(1).take_until(ident_break);
+			if s.is_empty() { Failed(ParseError::NameRequired(s.current())) }
+			else { Success(PixelFormat::Ref(s.clone_as_string()), rest) }
+		}
+		else
+		{
+			let (bits, rest) = source.take_until(ident_break);
+			let (form, rest) = rest.drop_while(ignore_chars).take_until(ident_break);
+			match (bits.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref(), form.clone_as_string_flatmapping(|&c| c.to_uppercase()).as_ref())
+			{
+				("R8", "UNORM") => Success(PixelFormat::Value(VkFormat::R8_UNORM), rest),
+				("R8", "SNORM") => Success(PixelFormat::Value(VkFormat::R8_SNORM), rest),
+				("R8G8", "UNORM") => Success(PixelFormat::Value(VkFormat::R8G8_UNORM), rest),
+				("R8G8", "SNORM") => Success(PixelFormat::Value(VkFormat::R8G8_SNORM), rest),
+				("R8G8B8", "UNORM") => Success(PixelFormat::Value(VkFormat::R8G8B8_UNORM), rest),
+				("R8G8B8", "SNORM") => Success(PixelFormat::Value(VkFormat::R8G8B8_SNORM), rest),
+				("R8G8B8A8", "UNORM") => Success(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), rest),
+				("R8G8B8A8", "SNORM") => Success(PixelFormat::Value(VkFormat::R8G8B8A8_SNORM), rest),
+				("R32", "SFLOAT") => Success(PixelFormat::Value(VkFormat::R32_SFLOAT), rest),
+				("R16G16B16A16", "UNORM") => Success(PixelFormat::Value(VkFormat::R16G16B16A16_UNORM), rest),
+				("R16G16B16A16", "SNORM") => Success(PixelFormat::Value(VkFormat::R16G16B16A16_SNORM), rest),
+				("R16G16B16A16", "SFLOAT") => Success(PixelFormat::Value(VkFormat::R16G16B16A16_SFLOAT), rest),
+				_ => Failed(ParseError::UnknownFormat(bits.current()))
+			}
+		}
 	}
+}
+#[test] fn parse_pixel_format()
+{
+	Testing!
+	{
+		PixelFormat::parse: "R8G8B8A8 UNORM" => Success(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), ParseLine(&[], 14)),
+		PixelFormat::parse: "R8G8b8A8 Unorm" => Success(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), ParseLine(&[], 14)),
+		PixelFormat::parse: "$ScreenFormat" => Success(PixelFormat::Ref("ScreenFormat".into()), ParseLine(&[], 13)),
+		PixelFormat::parse: "R8G8B8A8 SF" => Failed(ParseError::UnknownFormat(0))
+	}
+}
+
+lazy_static!
+{
+	static ref CAO: Vec<char> = "ColorAttachmentOptimal".chars().collect();
+	static ref SROO: Vec<char> = "ShaderReadOnlyOptimal".chars().collect();
+}
+pub fn parse_image_layout(source: ParseLine) -> PartialResult<VkImageLayout>
+{
+	let (name, rest) = source.take_until(ident_break);
+	if name == CAO[..] { Success(VkImageLayout::ColorAttachmentOptimal, rest) }
+	else if name == SROO[..] { Success(VkImageLayout::ShaderReadOnlyOptimal, rest) }
+	else { Failed(ParseError::UnknownImageLayout(name.current())) }
+}
+#[test] fn image_layouts()
+{
+	Testing!
+	{
+		parse_image_layout: "ColorAttachmentOptimal:" => Success(VkImageLayout::ColorAttachmentOptimal, ParseLine(&[':'], 22)),
+		parse_image_layout: "Shaders" => Failed(ParseError::UnknownImageLayout(0))
+	}
+}
+
+lazy_static!
+{
+	static ref TOP: Vec<char> = "TopOfPipe".chars().collect();
+	static ref FSS: Vec<char> = "FragmentShaderStage".chars().collect();
+	static ref BOP: Vec<char> = "BottomOfPipe".chars().collect();
+}
+pub fn parse_pipeline_stage_bits(source: ParseLine) -> PartialResult<VkPipelineStageFlags>
+{
+	fn determine_const(input: &ParseLine) -> Option<VkPipelineStageFlags>
+	{
+		if *input == TOP[..] { Some(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT) }
+		else if *input == FSS[..] { Some(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT) }
+		else if *input == BOP[..] { Some(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT) }
+		else { None }
+	}
+	fn recursive<'s>(input: ParseLine<'s>, mut accum: VkPipelineStageFlags) -> PartialResult<'s, VkPipelineStageFlags>
+	{
+		if input.is_empty() { Success(accum, input) }
+		else
+		{
+			let (flag, rest) = input.take_until(ident_break);
+			PartialResult::from_opt(determine_const(&flag), rest, ParseError::UnknownPipelineStageFlag(flag.current())).and_then(|f, r|
+			{
+				accum |= f;
+				let r = r.drop_while(ignore_chars);
+				if r.front() == Some('/') { recursive(r.drop_opt(1).drop_while(ignore_chars), accum) } else { Success(accum, r) }
+			})
+		}
+	}
+	recursive(source, 0)
 }
 lazy_static!
 {
-	static ref IL_COLORATTACHMENTOPTIMAL: Vec<char> = "ColorAttachmentOptimal".chars().collect();
-	static ref IL_SHADERREADONLYOPTIMAL: Vec<char> = "ShaderReadOnlyOptimal".chars().collect();
+	static ref CAW: Vec<char> = "ColorAttachmentWrite".chars().collect();
+	static ref SR: Vec<char> = "ShaderRead".chars().collect();
 }
-pub fn parse_image_layout(source: &[char]) -> Result<(VkImageLayout, &[char]), ParseError>
+pub fn parse_access_mask(source: ParseLine) -> PartialResult<VkAccessFlags>
 {
-	if source.starts_with_trailing_opt(&IL_COLORATTACHMENTOPTIMAL, ident_break)
+	fn determine_const(input: &ParseLine) -> Option<VkAccessFlags>
 	{
-		Ok((VkImageLayout::ColorAttachmentOptimal, source.drop(IL_COLORATTACHMENTOPTIMAL.len())))
+		if *input == CAW[..] { Some(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) }
+		else if *input == SR[..] { Some(VK_ACCESS_SHADER_READ_BIT) }
+		else { None }
 	}
-	else if source.starts_with_trailing_opt(&IL_SHADERREADONLYOPTIMAL, ident_break)
+	fn recursive<'s>(input: ParseLine<'s>, mut accum: VkAccessFlags) -> PartialResult<'s, VkAccessFlags>
 	{
-		Ok((VkImageLayout::ShaderReadOnlyOptimal, source.drop(IL_SHADERREADONLYOPTIMAL.len())))
-	}
-	else { Err(ParseError::UnknownImageLayout) }
-}
-
-pub fn parse_pipeline_stage_bits(source: &[char]) -> Result<(VkPipelineStageFlags, &[char]), ParseError>
-{
-	fn recursive<'s>(input: &'s [char], accum: &mut VkPipelineStageFlags) -> Result<&'s [char], ParseError>
-	{
-		if input.is_empty() { Ok(input) }
+		if input.is_empty() { Success(accum, input) }
 		else
 		{
-			let (flag, r) = input.take_until(ident_break);
-			let f = match flag.clone_as_string().as_ref()
+			let (flag, rest) = input.take_until(ident_break);
+			PartialResult::from_opt(determine_const(&flag), rest, ParseError::UnknownAccessFlag(flag.current())).and_then(|f, r|
 			{
-				"TopOfPipe" => Ok(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT),
-				"FragmentShaderStage" => Ok(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
-				"BottomOfPipe" => Ok(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT),
-				_ => Err(ParseError::UnknownPipelineStageFlag)
-			};
-			f.and_then(|f|
-			{
-				*accum |= f;
-				let r = r.skip_while(ignore_chars);
-				if r.front() == Some('/') { recursive(r.drop(1).skip_while(ignore_chars), accum) } else { Ok(r) }
+				accum |= f;
+				let r = r.drop_while(ignore_chars);
+				if r.front() == Some('/') { recursive(r.drop_opt(1).drop_while(ignore_chars), accum) } else { Success(accum, r) }
 			})
 		}
 	}
-	let mut accum = 0;
-	recursive(source, &mut accum).map(|r| (accum, r))
+	recursive(source, 0)
 }
-pub fn parse_access_mask(source: &[char]) -> Result<(VkAccessFlags, &[char]), ParseError>
+pub fn parse_string_literal(source: ParseLine) -> PartialResult<String>
 {
-	fn recursive<'s>(input: &'s [char], accum: &mut VkAccessFlags) -> Result<&'s [char], ParseError>
-	{
-		if input.is_empty() { Ok(input) }
-		else
-		{
-			let (flag, r) = input.take_until(ident_break);
-			let f = match flag.clone_as_string().as_ref()
-			{
-				"ColorAttachmentWrite" => Ok(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
-				"ShaderRead" => Ok(VK_ACCESS_SHADER_READ_BIT),
-				_ => Err(ParseError::UnknownAccessFlag)
-			};
-			f.and_then(|f|
-			{
-				*accum |= f;
-				let r = r.skip_while(ignore_chars);
-				if r.front() == Some('/') { recursive(r.drop(1).skip_while(ignore_chars), accum) } else { Ok(r) }
-			})
-		}
-	}
-	let mut accum = 0;
-	recursive(source, &mut accum).map(|r| (accum, r))
-}
-pub fn parse_string_literal(source: &[char]) -> Result<(String, &[char]), ParseError>
-{
-	fn recursive_char<'s>(input: &'s [char], sink: &mut String) -> Result<&'s [char], ParseError>
+	fn recursive_char<'s>(input: ParseLine<'s>, sink: &mut String) -> PartialResult<'s, ()>
 	{
 		match input.front()
 		{
-			Some('\\') => recursive_escape(input.drop(1), sink),
-			Some('"') => Ok(input.drop(1)),
-			Some(c) => { sink.push(c); recursive_char(input.drop(1), sink) },
-			None => Err(ParseError::ClosingRequired)
+			Some('\\') => recursive_escape(input.drop_opt(1), sink),
+			Some('"') => Success((), input.drop_opt(1)),
+			Some(c) => { sink.push(c); recursive_char(input.drop_one(), sink) },
+			None => Failed(ParseError::ClosingRequired(input.current()))
 		}
 	}
-	fn recursive_escape<'s>(input: &'s [char], sink: &mut String) -> Result<&'s [char], ParseError>
+	fn recursive_escape<'s>(input: ParseLine<'s>, sink: &mut String) -> PartialResult<'s, ()>
 	{
 		match input.front()
 		{
-			Some('t') => { sink.push('\t'); recursive_char(input.drop(1), sink) },
-			Some('n') => { sink.push('\n'); recursive_char(input.drop(1), sink) },
-			Some('r') => { sink.push('\r'); recursive_char(input.drop(1), sink) },
-			Some(c) => { sink.push(c); recursive_char(input.drop(1), sink) },
-			None => Err(ParseError::ClosingRequired)
+			Some('t') => { sink.push('\t'); recursive_char(input.drop_opt(1), sink) },
+			Some('n') => { sink.push('\n'); recursive_char(input.drop_opt(1), sink) },
+			Some('r') => { sink.push('\r'); recursive_char(input.drop_opt(1), sink) },
+			Some(c) => { sink.push(c); recursive_char(input.drop_opt(1), sink) },
+			None => Failed(ParseError::ClosingRequired(input.current()))
 		}
 	}
 
 	if source.front() == Some('"')
 	{
 		let mut buf = String::new();
-		recursive_char(source.drop(1), &mut buf).map(|r| (buf, r))
+		recursive_char(source.drop_opt(1), &mut buf).vmap(|_| buf)
 	}
-	else { Err(ParseError::Expected("String Literal")) }
+	else { Failed(ParseError::Expected("String Literal", source.current())) }
 }
 
-#[cfg(test)] use itertools::Itertools;
-#[test] fn pixel_format()
-{
-	assert_eq!(parse_pixel_format(&"R8G8B8A8 UNORM".chars().collect_vec()), Ok((PixelFormat::User(VkFormat::R8G8B8A8_UNORM), &[][..])));
-	assert_eq!(parse_pixel_format(&"R8g8B8a8 Unorm".chars().collect_vec()), Ok((PixelFormat::User(VkFormat::R8G8B8A8_UNORM), &[][..])));
-	assert_eq!(parse_pixel_format(&"R8G8B8A8 UNORM,".chars().collect_vec()), Ok((PixelFormat::User(VkFormat::R8G8B8A8_UNORM), &[','][..])));
-	assert_eq!(parse_pixel_format(&"$ScreenFormat,".chars().collect_vec()), Ok((PixelFormat::Ref("ScreenFormat".into()), &[','][..])));
-	assert_eq!(parse_pixel_format(&"R8G8B8A8 SF".chars().collect_vec()), Err(ParseError::UnknownFormat));
-}
-#[test] fn image_layout()
-{
-	assert_eq!(parse_image_layout(&"ColorAttachmentOptimal".chars().collect_vec()), Ok((VkImageLayout::ColorAttachmentOptimal, &[][..])));
-	assert_eq!(parse_image_layout(&"ShaderReadOnlyOptimal :".chars().collect_vec()), Ok((VkImageLayout::ShaderReadOnlyOptimal, &[' ', ':'][..])));
-	assert_eq!(parse_image_layout(&['A']), Err(ParseError::UnknownImageLayout));
-}
 #[test] fn pipeline_stage_bits()
 {
-	assert_eq!(parse_pipeline_stage_bits(&"FragmentShaderStage".chars().collect_vec()), Ok((VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, &[][..])));
-	assert_eq!(parse_pipeline_stage_bits(&"TopOfPipe / BottomOfPipe".chars().collect_vec()), Ok((VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, &[][..])));
-	assert_eq!(parse_pipeline_stage_bits(&"a".chars().collect_vec()), Err(ParseError::UnknownPipelineStageFlag));
+	Testing!
+	{
+		parse_pipeline_stage_bits: "FragmentShaderStage" => Success(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, ParseLine(&[], 19)),
+		parse_pipeline_stage_bits: "TopOfPipe / BottomOfPipe" => Success(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ParseLine(&[], 24)),
+		parse_pipeline_stage_bits: "a" => Failed(ParseError::UnknownPipelineStageFlag(0))
+	}
 }
 #[test] fn access_mask()
 {
-	assert_eq!(parse_access_mask(&"ColorAttachmentWrite".chars().collect_vec()), Ok((VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, &[][..])));
-	assert_eq!(parse_access_mask(&"ColorAttachmentWrite / ShaderRead".chars().collect_vec()), Ok((VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT, &[][..])));
-	assert_eq!(parse_access_mask(&"a".chars().collect_vec()), Err(ParseError::UnknownAccessFlag));
+	Testing!
+	{
+		parse_access_mask: "ColorAttachmentWrite" => Success(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, ParseLine(&[], 20)),
+		parse_access_mask: "ColorAttachmentWrite / ShaderRead" => Success(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT, ParseLine(&[], 33)),
+		parse_access_mask: "a" => Failed(ParseError::UnknownAccessFlag(0))
+	}
 }
