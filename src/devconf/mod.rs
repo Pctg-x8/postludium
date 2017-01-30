@@ -7,16 +7,12 @@ use std::collections::HashMap;
 use super::parsetools::*;
 use std::borrow::Cow;
 use lazylines::*;
-use itertools::Itertools;
+#[cfg(test)] use itertools::Itertools;
 
 #[macro_use] mod items;
 use self::items::*;
-
-struct Let<F: FnOnce() -> T, T>(F);
-impl<F: FnOnce() -> T, T> Let<F, T>
-{
-	fn _in<G: FnOnce(T) -> R, R>(self, f: G) -> R { f(self.0()) }
-}
+mod hobjects;
+use self::hobjects::*;
 
 pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
 impl<T> std::ops::Index<usize> for NamedContents<T>
@@ -97,43 +93,6 @@ pub enum DescriptorEntryKind
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility: VkShaderStageFlags }
 
-#[cfg_attr(test, derive(Debug, PartialEq))] pub struct Transition<T> { from: T, to: T }
-impl<T> Transition<T>
-{
-	fn parse<'s, F>(input: &mut ParseLine<'s>, childparser: F) -> Result<Self, ParseError>
-		where F: Fn(&mut ParseLine<'s>) -> Result<T, ParseError>
-	{
-		childparser(input).and_then(|a|
-		{
-			input.drop_while(ignore_chars);
-			if input.starts_with_trailing_opt(&['T', 'o'], ident_break) || input.starts_with(&['-', '>'])
-			{
-				childparser(input.drop_opt(2).drop_while(ignore_chars)).map(|b| Transition { from: a, to: b })
-			}
-			else if from_token(input) { childparser(input.drop_while(ignore_chars)).map(|b| Transition { from: b, to: a }) }
-			else { Err(ParseError::DirectionRequired(input.current())) }
-		})
-	}
-}
-impl<T> Transition<T> where T: Copy
-{
-	fn parse_opt<'s, F>(input: &mut ParseLine<'s>, childparser: F) -> Result<Self, ParseError> where F: Fn(&mut ParseLine<'s>) -> Result<T, ParseError>
-	{
-		childparser(input).and_then(|a|
-		{
-			input.drop_while(ignore_chars);
-			if input.starts_with_trailing_opt(&['T', 'o'], ident_break) || input.starts_with(&['-', '>'])
-			{
-				childparser(input.drop_opt(2).drop_while(ignore_chars)).map(|b| Transition { from: a, to: b })
-			}
-			else if from_token(input)
-			{
-				childparser(input.drop_while(ignore_chars)).map(|b| Transition { to: a, from: b })
-			}
-			else { Ok(Transition { to: a, from: a }) }
-		})
-	}
-}
 pub struct NamedConfigLine<C> { name: Option<String>, config: C }
 impl<C> NamedConfigLine<C>
 {
