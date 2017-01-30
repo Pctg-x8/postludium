@@ -8,4 +8,4 @@ lazy_static = "0.2.1"
 log = "0.3.6"
 itertools = "0.5.2"
 
-interlude = { path = "../interlude" }
+interlude = { git = "https://github.com/Pctg-x8/interlude" }
