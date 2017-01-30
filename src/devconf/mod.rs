@@ -703,6 +703,32 @@ fn parse_subpass_deps(input: &mut ParseLine) -> Result<RPSubpassDeps, ParseError
 		else { RPSubpassDeps { passtrans: pt, access_mask: amt, stage_bits: sf, by_region: false } }
 	})
 }
+#[test] fn test_subpass_deps()
+{
+	Testing!
+	{
+		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage, ByRegion" => Ok(RPSubpassDeps
+		{
+			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
+			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
+			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: true
+		}),
+		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage" => Ok(RPSubpassDeps
+		{
+			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
+			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
+			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: false
+		}),
+		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage," => Ok(RPSubpassDeps
+		{
+			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
+			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
+			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: false
+		}),
+		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead" => Err(ParseError::DelimiterRequired(42)),
+		parse_subpass_deps: "0 -> 1" => Err(ParseError::DelimiterRequired(6))
+	}
+}
 
 fn from_token(input: &mut ParseLine) -> bool
 {
@@ -778,18 +804,6 @@ fn at_token(input: &mut ParseLine) -> bool
 		}),
 		parse_subpass_desc: "Preserve 0" => Err(ParseError::CorruptedSubpassDesc(0)),
 		parse_subpass_desc: "RenderTo 0 RenderTo 1" => Err(ParseError::DefinitionOverrided)
-	}
-}
-#[test] fn test_subpass_deps()
-{
-	Testing!
-	{
-		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage, ByRegion" => Ok(RPSubpassDeps
-		{
-			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
-			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
-			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: true
-		})
 	}
 }
 #[test] fn test_external_resources()
