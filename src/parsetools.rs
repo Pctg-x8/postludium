@@ -59,21 +59,24 @@ impl<'s> ParseLine<'s>
 
 	pub fn peek(&self, offset: usize) -> Option<char> { if self.len() <= offset { None } else { Some(self.0[offset]) } }
 	pub fn front(&self) -> Option<char> { self.peek(0) }
-	pub fn drop_one(self) -> Self
+	pub fn drop_one(&mut self) -> &mut Self
 	{
-		if self.front() == Some('\t') { ParseLine(&self.0[1..], (((self.1 - 1) / 4) + 1 * 4) + 1) }
-		else { ParseLine(&self.0[1..], self.1 + 1) }
+		self.1 = if self.front() == Some('\t') { (((self.1 - 1) / 4) + 1) * 4 + 1 } else { self.1 + 1 };
+		self.0 = &self.0[1..];
+		self
 	}
-	pub fn drop_opt(self, count: usize) -> Self
+	pub fn drop_opt(&mut self, count: usize) -> &mut Self
 	{
-		ParseLine(&self.0[count..], self.1 + count)
+		self.0 = &self.0[count..];
+		self.1 += count;
+		self
 	}
-	pub fn drop_while<F>(mut self, pred: F) -> Self where F: Fn(char) -> bool
+	pub fn drop_while<F>(&mut self, pred: F) -> &mut Self where F: Fn(char) -> bool
 	{
 		if pred('\t')
 		{
 			// unoptimized
-			while self.front().map(&pred).unwrap_or(false) { self = self.drop_one(); }
+			while self.front().map(&pred).unwrap_or(false) { self.drop_one(); }
 			self
 		}
 		else
@@ -83,25 +86,27 @@ impl<'s> ParseLine<'s>
 			self.drop_opt(counter)
 		}
 	}
-	pub fn take_while<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool
+	pub fn take_while<F>(&mut self, pred: F) -> Self where F: Fn(char) -> bool
 	{
 		if pred('\t')
 		{
 			// unoptimized
-			let mut rest = self.clone();
+			let start = self.clone();
 			let mut counter = 0;
-			while rest.front().map(&pred).unwrap_or(false) { counter += 1; rest = rest.drop_one(); }
-			(ParseLine(&self.0[..counter], self.1), rest)
+			while self.front().map(&pred).unwrap_or(false) { counter += 1; self.drop_one(); }
+			ParseLine(&start.0[..counter], start.1)
 		}
 		else
 		{
 			let mut counter = 0;
 			while self.peek(counter).map(&pred).unwrap_or(false) { counter += 1; }
-			(ParseLine(&self.0[..counter], self.1), ParseLine(&self.0[counter..], self.1 + counter))
+			let r = ParseLine(&self.0[..counter], self.1);
+			self.drop_opt(counter);
+			r
 		}
 	}
-	pub fn drop_until<F>(self, pred: F) -> Self where F: Fn(char) -> bool { self.drop_while(|c| !pred(c)) }
-	pub fn take_until<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool { self.take_while(|c| !pred(c)) }
+	pub fn drop_until<F>(&mut self, pred: F) -> &mut Self where F: Fn(char) -> bool { self.drop_while(|c| !pred(c)) }
+	pub fn take_until<F>(&mut self, pred: F) -> Self where F: Fn(char) -> bool { self.take_while(|c| !pred(c)) }
 
 	pub fn clone_as_string(&self) -> String { self.0.iter().cloned().collect() }
 	pub fn clone_as_string_flatmapping<F, I>(&self, map: F) -> String where F: Fn(&char) -> I, I: Iterator<Item = char>
