@@ -1,13 +1,15 @@
 //! Postludium: Device Configuration Processor
 
-use std;
-use interlude::*;
-use interlude::ffi::*;
+#[macro_use] extern crate lazy_static;
+#[macro_use] extern crate parsetools;
+extern crate interlude_vk as vk;
+extern crate itertools;
+
 use std::collections::HashMap;
-use super::parsetools::*;
+use parsetools::*;
 use std::borrow::Cow;
-use lazylines::*;
 #[cfg(test)] use itertools::Itertools;
+use vk::ffi::*;
 
 #[macro_use] mod items;
 use self::items::*;
@@ -46,6 +48,7 @@ impl<T> NamedContents<T>
 		&mut self.1[p]
 	}
 }
+/*
 pub struct DeviceResources
 {
 	pub render_passes: NamedContents<RenderPass>,
@@ -54,6 +57,7 @@ pub struct DeviceResources
 	pub pipeline_layouts: NamedContents<PipelineLayout>,
 	pub pipeline_states: NamedContents<GraphicsPipeline>
 }
+*/
 
 // Source Representations
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -163,41 +167,19 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 	}
 }
 
-impl<'s> LazyLines<'s>
-{
-	fn acquire_line(&mut self, level: usize) -> Option<(usize, ParseLine<'s>)>
-	{
-		const HEAD: [char; 3] = ['-'; 3];
-
-		self.next().and_then(|(l, s)| if s.front() == Some('#') || s.front() == None { self.drop_line(); self.acquire_line(level) }
-			else if s.starts_with_trailing_opt(&HEAD[..level], |c| c != '-')
-			{
-				self.drop_line();
-				let mut s = ParseLine(&s[level..], level);
-				s.drop_while(ignore_chars);
-				Some((l, s))
-			}
-			else { None })
-	}
-}
-
 fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, ParseLine<'s>)>
 {
 	const HEAD: [char; 3] = ['-'; 3];
 
-	if let Some((l, s)) = lines.next()
-	{
-		if s.front() == Some('#') || s.front() == None { lines.drop_line(); acquire_line(lines, level) }
+	lines.next().and_then(|(l, s)| if s.front() == Some('#') || s.front() == None { lines.drop_line(); acquire_line(lines, level) }
 		else if s.starts_with_trailing_opt(&HEAD[..level], |c| c != '-')
 		{
-			let (l, s) = lines.pop().unwrap();
+			lines.drop_line();
 			let mut s = ParseLine(&s[level..], level);
 			s.drop_while(ignore_chars);
 			Some((l, s))
 		}
-		else { None }
-	}
-	else { None }
+		else { None })
 }
 
 fn ignore_chars(c: char) -> bool { c == ' ' || c == '\t' }
@@ -283,7 +265,7 @@ lazy_static!
 fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 {
 	let mut rpd = RenderPassData { attachments: NamedContents::new(), passes: NamedContents::new(), deps: Vec::new() };
-	while let Some((l, mut s)) = source.acquire_line(1)
+	while let Some((l, mut s)) = acquire_line(source, 1)
 	{
 		parse_config_name(&mut s).and_then(|name|
 			if name == ATTACHMENTS[..]
@@ -291,7 +273,7 @@ fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 				if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
 				else
 				{
-					while let Some((l, mut s)) = source.acquire_line(2)
+					while let Some((l, mut s)) = acquire_line(source, 2)
 					{
 						match NamedConfigLine::parse(&mut s, parse_rp_attachment)
 						{
@@ -309,7 +291,7 @@ fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 				if !rpd.passes.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
 				else
 				{
-					while let Some((l, mut s)) = source.acquire_line(2)
+					while let Some((l, mut s)) = acquire_line(source, 2)
 					{
 						match NamedConfigLine::parse(&mut s, parse_subpass_desc)
 						{
@@ -327,7 +309,7 @@ fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 				if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
 				else
 				{
-					while let Some((l, mut s)) = source.acquire_line(2)
+					while let Some((l, mut s)) = acquire_line(source, 2)
 					{
 						match parse_subpass_deps(&mut s)
 						{
@@ -358,7 +340,7 @@ lazy_static!
 fn parse_simple_renderpass(line_in: usize, source: &mut LazyLines) -> SimpleRenderPassData
 {
 	let (mut fmt, mut clear_mode) = (None, None);
-	while let Some((l, mut s)) = source.acquire_line(1)
+	while let Some((l, mut s)) = acquire_line(source, 1)
 	{
 		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
 		{
@@ -377,7 +359,7 @@ fn parse_simple_renderpass(line_in: usize, source: &mut LazyLines) -> SimpleRend
 fn parse_presented_renderpass(line_in: usize, source: &mut LazyLines) -> PresentedRenderPassData
 {
 	let (mut fmt, mut clear_mode) = (None, None);
-	while let Some((l, mut s)) = source.acquire_line(1)
+	while let Some((l, mut s)) = acquire_line(source, 1)
 	{
 		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
 		{
@@ -431,7 +413,7 @@ fn parse_framebuffer(rest: &mut ParseLine, mut source: &mut LazyLines) -> Result
 		.and_then(|(arg, vs)|
 		{
 			let mut clear_mode = None;
-			while let Some((l, mut s)) = source.acquire_line(1)
+			while let Some((l, mut s)) = acquire_line(source, 1)
 			{
 				parse_config_name(s.drop_while(ignore_chars)).and_then(|name|
 					if name == CLEARMODE[..]
@@ -453,7 +435,7 @@ fn parse_framebuffer(rest: &mut ParseLine, mut source: &mut LazyLines) -> Result
 fn parse_descriptor_set_layout(source: &mut LazyLines) -> Vec<DescriptorEntry>
 {
 	let mut entries = Vec::new();
-	while let Some((l, mut s)) = source.acquire_line(1)
+	while let Some((l, mut s)) = acquire_line(source, 1)
 	{
 		entries.push(parse_descriptor_entry(&mut s).report_error(l));
 	}

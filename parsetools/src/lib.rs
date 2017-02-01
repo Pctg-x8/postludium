@@ -1,51 +1,37 @@
-// ParseTools for reference to slice of char
 
-use std;
+mod lazylines;
+pub use lazylines::LazyLines;
 
-pub trait ParseTools : std::marker::Sized
+pub trait CharSliceSafetyExt
 {
 	fn peek(&self, offset: usize) -> Option<char>;
-	fn skip_while<F>(self, pred: F) -> Self where F: Fn(char) -> bool;
-	fn take_while<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool;
-	fn drop(self, count: usize) -> Self;
-	fn clone_as_string_mapping<F>(self, map: F) -> String where F: Fn(&char) -> char;
-	fn clone_as_string_flatmapping<F, I>(self, map: F) -> String where F: Fn(&char) -> I, I: Iterator<Item = char>;
-	fn starts_with(&self, target: &[char]) -> bool;
-
 	fn front(&self) -> Option<char> { self.peek(0) }
-	fn is_front_of(&self, t: char) -> bool { self.is_front(move |c| c == t) }
-	fn is_front<F>(&self, pred: F) -> bool where F: FnOnce(char) -> bool { self.front().map(pred).unwrap_or(false) }
-	fn take_until<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool { self.take_while(move |c| !pred(c)) }
-	fn skip_until<F>(self, pred: F) -> Self where F: Fn(char) -> bool { self.skip_while(move |c| !pred(c)) }
-	fn clone_as_string(self) -> String { self.clone_as_string_mapping(char::clone) }
-	fn starts_with_trailing_opt<F>(&self, target: &[char], trailing: F) -> bool where F: Fn(char) -> bool
+
+	fn starts_with(&self, target: &[char]) -> bool;
+	fn starts_with_trailing_opt<F>(&self, target: &[char], trailing: F) -> bool where F: FnOnce(char) -> bool
 	{
 		self.starts_with(target) && self.peek(target.len()).map(trailing).unwrap_or(true)
 	}
 }
-impl<'a> ParseTools for &'a [char]
+impl CharSliceSafetyExt for [char]
 {
-	fn peek(&self, offset: usize) -> Option<char> { if self.len() <= offset { None } else { Some(self[offset]) } }
-	fn skip_while<F>(self, pred: F) -> Self where F: Fn(char) -> bool
-	{
-		if !self.is_empty() && pred(self[0]) { Self::skip_while(&self[1..], pred) } else { self }
-	}
-	fn take_while<F>(self, pred: F) -> (Self, Self) where F: Fn(char) -> bool
-	{
-		fn _impl<F>(input: &[char], counter: usize, pred: F) -> usize where F: Fn(char) -> bool
-		{
-			if !input.is_empty() && pred(input[0]) { _impl(&input[1..], counter + 1, pred) } else { counter }
-		}
-		let len = _impl(self, 0, pred);
-		(&self[..len], &self[len..])
-	}
-	fn drop(self, count: usize) -> Self { &self[std::cmp::min(count, self.len())..] }
-	fn clone_as_string_mapping<F>(self, map: F) -> String where F: Fn(&char) -> char { self.into_iter().map(map).collect() }
-	fn clone_as_string_flatmapping<F, I>(self, map: F) -> String where F: Fn(&char) -> I, I: Iterator<Item = char> { self.into_iter().flat_map(map).collect() }
-	fn starts_with(&self, target: &[char]) -> bool { self.len() >= target.len() && &self[..target.len()] == target }
+	fn peek(&self, offset: usize) -> Option<char> { if offset >= self.len() { None } else { Some(self[offset]) } }
+	fn starts_with(&self, target: &[char]) -> bool { target.len() <= self.len() && &self[..target.len()] == target }
 }
 
-#[derive(Clone)] #[cfg_attr(test, derive(Debug, PartialEq))]
+#[test] fn char_slice_safety_ext()
+{
+	assert_eq!("test".chars().collect::<Vec<_>>().front(), Some('t'));
+	assert_eq!("test".chars().collect::<Vec<_>>().peek(0), Some('t'));
+	assert_eq!("test".chars().collect::<Vec<_>>().peek(1), Some('e'));
+	assert!("Hello, World!".chars().collect::<Vec<_>>().starts_with(&"Hello".chars().collect::<Vec<_>>()));
+	assert!(!"Hello, World!".chars().collect::<Vec<_>>().starts_with(&"World".chars().collect::<Vec<_>>()));
+	assert!("Hello, World!".chars().collect::<Vec<_>>().starts_with_trailing_opt(&"Hello".chars().collect::<Vec<_>>(), |c| c == ','));
+	assert!(!"Hello World!".chars().collect::<Vec<_>>().starts_with_trailing_opt(&"Hello".chars().collect::<Vec<_>>(), |c| c == ','));
+	assert!("Hello".chars().collect::<Vec<_>>().starts_with_trailing_opt(&"Hello".chars().collect::<Vec<_>>(), |c| c == ','));
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParseLine<'s>(pub &'s [char], pub usize);
 impl<'s> PartialEq<[char]> for ParseLine<'s>
 {
@@ -114,13 +100,10 @@ impl<'s> ParseLine<'s>
 		self.0.iter().flat_map(map).collect()
 	}
 
-	pub fn starts_with(&self, target: &[char]) -> bool
-	{
-		self.0.len() >= target.len() && &self.0[..target.len()] == target
-	}
+	pub fn starts_with(&self, target: &[char]) -> bool { self.0.starts_with(target) }
 	pub fn starts_with_trailing_opt<F>(&self, target: &[char], trailing: F) -> bool where F: FnOnce(char) -> bool
 	{
-		self.starts_with(target) && self.peek(target.len()).map(trailing).unwrap_or(true)
+		self.0.starts_with_trailing_opt(target, trailing)
 	}
 	pub fn trackbacking<F, T>(&mut self, act: F) -> Option<T> where F: FnOnce(&mut Self) -> Option<T>
 	{
@@ -133,6 +116,7 @@ impl<'s> ParseLine<'s>
 	}
 }
 
+#[macro_export]
 macro_rules! PartialEqualityMatchMap
 {
 	($src: expr; { $($target: expr => $st: expr),* }) =>
@@ -144,6 +128,7 @@ macro_rules! PartialEqualityMatchMap
 		$(if $src == $target { $st })else* else { $est }
 	}
 }
+#[macro_export]
 macro_rules! PartialEqualityMatch
 {
 	($src: expr; { $($target: expr => $st: stmt),*; _ => $est: stmt }) =>

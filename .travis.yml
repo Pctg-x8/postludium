@@ -1,4 +1,6 @@
 language: rust
 rust: stable
 
-script: cargo test --verbose --features container
+script:
+  - cd parsetools && cargo test --verbose
+  - cd ../devconf && cargo test --verbose

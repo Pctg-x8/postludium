@@ -1,6 +1,7 @@
 // Peeking with Cache
 
-use ::parsetools::ParseTools;
+use CharSliceSafetyExt;
+use std::cmp::min;
 
 pub struct LazyLines<'a>
 {
@@ -13,6 +14,22 @@ impl<'a> LazyLines<'a>
 		LazyLines { source: source, current: 0, cache: None }
 	}
 
+	fn fetch_line(&mut self) -> &'a [char]
+	{
+		let mut counter = 0;
+		while let Some(c) = self.source.front()
+		{
+			if c == '\n' { break; }
+			counter += 1;
+		}
+		let l = &self.source[..counter];
+		if counter > 0
+		{
+			self.source = &self.source[min(self.source.len(), counter + 1)..];
+		}
+		l
+	}
+
 	pub fn next(&mut self) -> Option<(usize, &'a [char])>
 	{
 		if self.cache.is_none()
@@ -20,8 +37,7 @@ impl<'a> LazyLines<'a>
 			if self.source.is_empty() { None }
 			else
 			{
-				let (l, s) = self.source.take_until(|c| c == '\n');
-				self.source = if s.is_empty() { s } else { s.drop(1) };
+				let l = self.fetch_line();
 				self.current += 1;
 				self.cache = Some((self.current, l));
 				self.cache.clone()
@@ -36,8 +52,7 @@ impl<'a> LazyLines<'a>
 			if self.source.is_empty() { None }
 			else
 			{
-				let (l, s) = self.source.take_until(|c| c == '\n');
-				self.source = if s.is_empty() { s } else { s.drop(1) };
+				let l = self.fetch_line();
 				self.current += 1;
 				Some((self.current, l))
 			}
@@ -50,8 +65,7 @@ impl<'a> LazyLines<'a>
 		{
 			if !self.source.is_empty()
 			{
-				let (_, s) = self.source.take_until(|c| c == '\n');
-				self.source = if s.is_empty() { s } else { s.drop(1) };
+				self.fetch_line();
 				self.current += 1;
 			}
 		}

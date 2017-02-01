@@ -1,0 +1,11 @@
+[package]
+name = "devconf"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+description = "Postludium Device Configuration"
+
+[dependencies]
+lazy_static = "0.2.2"
+parsetools = { path = "../parsetools" }
+interlude-vk = { git = "https://github.com/Pctg-x8/interlude_vk.git" }
+itertools = "0.5.9"

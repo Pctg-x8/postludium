@@ -3,6 +3,8 @@
 #[macro_use] extern crate interlude;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
+#[macro_use] extern crate parsetools;
+extern crate devconf;
 extern crate itertools;
 
 use interlude::*;
@@ -14,12 +16,7 @@ use std::ops::Deref;
 use std::borrow::Cow;
 use std::io::prelude::*;
 
-#[macro_use] mod parsetools;
-use self::parsetools::ParseTools;
-mod lazylines;
-use self::lazylines::*;
-
-mod devconf;
+use parsetools::*;
 
 #[derive(Clone)]
 pub enum DevConfParsingResult<T>
