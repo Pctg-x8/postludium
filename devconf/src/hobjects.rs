@@ -45,7 +45,7 @@ impl<T> Transition<T> where T: Copy
 #[test] fn parse_transition()
 {
 	use super::items::*;
-	use vk::ffi::*;
+	use vk::*;
 
 	assert_eq!(Transition::parse(&mut ParseLine(&"Vertex -> Fragment".chars().collect_vec(), 0), parse_shader_stage_bits),
 		Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_FRAGMENT_BIT }));
