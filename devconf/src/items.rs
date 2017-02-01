@@ -1,7 +1,7 @@
 
 use super::ParseError;
 use parsetools::*;
-use vk::ffi::*;
+use vk::*;
 use super::{ignore_chars, ident_break};
 
 #[cfg(test)] use itertools::Itertools;

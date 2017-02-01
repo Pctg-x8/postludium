@@ -2,14 +2,14 @@
 
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate parsetools;
-extern crate interlude_vk as vk;
+extern crate interlude_vkdefs as vk;
 #[cfg(test)] extern crate itertools;
 
 use std::collections::HashMap;
 use parsetools::*;
 use std::borrow::Cow;
 #[cfg(test)] use itertools::Itertools;
-use vk::ffi::*;
+use vk::*;
 
 #[macro_use] mod items;
 use self::items::*;
