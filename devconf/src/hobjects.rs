@@ -51,5 +51,5 @@ impl<T> Transition<T> where T: Copy
 		Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_FRAGMENT_BIT }));
 	assert_eq!(Transition::parse(&mut ParseLine(&"Vertex".chars().collect_vec(), 0), parse_shader_stage_bits), Err(ParseError::DirectionRequired(6)));
 	assert_eq!(Transition::parse_opt(&mut ParseLine(&"Vertex".chars().collect_vec(), 0), parse_shader_stage_bits),
-		Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_FRAGMENT_BIT }));
+		Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_VERTEX_BIT }));
 }

@@ -8,4 +8,6 @@ description = "Postludium Device Configuration"
 lazy_static = "0.2.2"
 parsetools = { path = "../parsetools" }
 interlude-vk = { git = "https://github.com/Pctg-x8/interlude_vk.git" }
+
+[dev-dependencies]
 itertools = "0.5.9"

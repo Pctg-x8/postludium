@@ -3,7 +3,7 @@
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate parsetools;
 extern crate interlude_vk as vk;
-extern crate itertools;
+#[cfg(test)] extern crate itertools;
 
 use std::collections::HashMap;
 use parsetools::*;
