@@ -3,6 +3,8 @@ rust: stable
 sudo: required
 
 before_install:
+  - sudo add-apt-repository ppa:graphics-drivers/ppa
+  - sudo apt update
   - sudo apt-get install -y libvulkan-dev
 
 script:
