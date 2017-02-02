@@ -96,6 +96,7 @@ impl ConfigInt
 		ConfigInt::parse_array: "[1," => Err(ParseError::IntValueRequired(3))
 	}
 }
+#[derive(Debug, PartialEq)]
 pub enum NumericLiteral { Integer(i64), Floating(f64), Floating32(f32) }
 impl NumericLiteral
 {
@@ -149,6 +150,7 @@ impl NumericLiteral
 	assert_eq!(NumericLiteral::parse(&"10f64".chars().collect(), true), Ok(NumericLiteral::Floating(10.0)));
 	assert_eq!(NumericLiteral::parse(&"".chars().collect(), false), Err(ParseError::Expected("Numerical Value", 0)));
 }
+#[derive(Debug, PartialEq)]
 pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
 impl AssetResource
 {
