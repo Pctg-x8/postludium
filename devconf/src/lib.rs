@@ -98,6 +98,8 @@ pub enum DescriptorEntryKind
 pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility: VkShaderStageFlags }
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct PushConstantLayout { range: std::ops::Range<usize>, visibility: VkShaderStageFlags }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PipelineLayout { descs: Vec<ConfigInt>, pushconstants: Vec<ConfigInt> }
 
 pub struct NamedConfigLine<C> { name: Option<String>, config: C }
 impl<C> NamedConfigLine<C>
@@ -221,7 +223,7 @@ fn parse_unnamed_device_resource(current: usize, source: &mut ParseLine, mut res
 		"PresentedRenderPass" => { parse_presented_renderpass(current, &mut rest); },
 		"DescriptorSetLayout" => { parse_descriptor_set_layout(&mut rest); },
 		"PushConstantLayout" => { parse_push_constant_layout(&mut rest).report_error(current); },
-		"PipelineLayout" => parse_pipeline_layout(rest),
+		"PipelineLayout" => { parse_pipeline_layout(&mut rest); },
 		"DescriptorSets" => parse_descriptor_sets(rest),
 		"PipelineState" => parse_pipeline_state(current, source.drop_while(ignore_chars), rest),
 		"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(current); },
@@ -513,9 +515,26 @@ fn parse_push_constant_layout(source: &mut LazyLines) -> Result<PushConstantLayo
 	range.ok_or(ParseError::ConfigRequired("Range"))
 	.and_then(|range| vis.ok_or(ParseError::ConfigRequired("Visibility")).map(|vis| PushConstantLayout { range: range, visibility: vis }))
 }
-fn parse_pipeline_layout(source: LazyLines)
+lazy_static!
 {
-	unimplemented!();
+	static ref DESCRIPTORS: Vec<char> = "Descriptors".chars().collect();
+	static ref PUSHCONSTANTLAYOUTS: Vec<char> = "PushConstantLayouts".chars().collect();
+}
+fn parse_pipeline_layout(source: &mut LazyLines) -> PipelineLayout
+{
+	let (mut desc, mut pcls) = (Vec::new(), Vec::new());
+	while let Some((l, mut s)) = acquire_line(source, 1)
+	{
+		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+		{
+			DESCRIPTORS[..] => ConfigInt::parse_array(s.drop_while(ignore_chars))
+				.and_then(|cv| if desc.is_empty() { desc = cv; Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			PUSHCONSTANTLAYOUTS[..] => ConfigInt::parse_array(s.drop_while(ignore_chars))
+				.and_then(|cv| if pcls.is_empty() { pcls = cv; Ok(()) } else { Err(ParseError::DefinitionOverrided) });
+			_ => Err(ParseError::UnknownConfig("PipelineLayout"))
+		})).report_error(l);
+	}
+	PipelineLayout { descs: desc, pushconstants: pcls }
 }
 fn parse_descriptor_sets(source: LazyLines)
 {
