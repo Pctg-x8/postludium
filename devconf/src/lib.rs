@@ -96,6 +96,8 @@ pub enum DescriptorEntryKind
 }
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility: VkShaderStageFlags }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PushConstantLayout { range: std::ops::Range<usize>, visibility: VkShaderStageFlags }
 
 pub struct NamedConfigLine<C> { name: Option<String>, config: C }
 impl<C> NamedConfigLine<C>
@@ -128,7 +130,7 @@ pub enum ParseError
 	DelimiterRequired(usize), ClosingRequired(usize), DefinitionOverrided, CorruptedSubpassDesc(usize),
 	UnknownPipelineStageFlag(usize), UnknownAccessFlag(usize), Expected(&'static str, usize), UnknownConfig(&'static str), ConfigRequired(&'static str),
 	UnknownExternalResource(usize), UnknownClearMode(usize), FormatRequired(usize), UnknownObjectRef(&'static str, usize), UnknownShaderStageFlag(usize),
-	UnknownDescriptorKind(usize)
+	UnknownDescriptorKind(usize), BytesizeRequired(usize)
 }
 trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
 impl<T> DivergenceExt<T> for Result<T, ParseError>
@@ -148,6 +150,7 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 			Err(ParseError::DirectionRequired(p)) => panic!("Direction Token(->, <-, To or From) required at line {}, col {}", line, p),
 			Err(ParseError::DelimiterRequired(p)) => panic!("Delimiter required at line {}, col {}", line, p),
 			Err(ParseError::ClosingRequired(p)) => panic!("Closing required at line {}, col {}", line, p),
+			Err(ParseError::BytesizeRequired(p)) => panic!("Bytesize required at line {}, col {}", line, p),
 			Err(ParseError::DefinitionOverrided) => panic!("Multiple definitions are found at line {}", line),
 			Err(ParseError::CorruptedSubpassDesc(p)) => panic!("Some Error are found parsing SubpassDesc at line {}, col {}", line, p),
 			Err(ParseError::IntValueRequired(p)) => panic!("Integer or ConfigRef required at line {}, col {}", line, p),
@@ -217,7 +220,7 @@ fn parse_unnamed_device_resource(current: usize, source: &mut ParseLine, mut res
 		"SimpleRenderPass" => { parse_simple_renderpass(current, &mut rest); },
 		"PresentedRenderPass" => { parse_presented_renderpass(current, &mut rest); },
 		"DescriptorSetLayout" => { parse_descriptor_set_layout(&mut rest); },
-		"PushConstantLayout" => parse_push_constant_layout(rest),
+		"PushConstantLayout" => { parse_push_constant_layout(&mut rest).report_error(current); },
 		"PipelineLayout" => parse_pipeline_layout(rest),
 		"DescriptorSets" => parse_descriptor_sets(rest),
 		"PipelineState" => parse_pipeline_state(current, source.drop_while(ignore_chars), rest),
@@ -488,9 +491,27 @@ fn parse_descriptor_entry(source: &mut ParseLine) -> Result<DescriptorEntry, Par
 		parse_descriptor_entry: "a: Vertex" => Err(ParseError::UnknownDescriptorKind(0))
 	}
 }
-fn parse_push_constant_layout(source: LazyLines)
+lazy_static!
 {
-	unimplemented!();
+	static ref RANGE: Vec<char> = "Range".chars().collect();
+	static ref VISIBILITY: Vec<char> = "Visibility".chars().collect();
+}
+fn parse_push_constant_layout(source: &mut LazyLines) -> Result<PushConstantLayout, ParseError>
+{
+	let (mut range, mut vis) = (None, None);
+	while let Some((l, mut s)) = acquire_line(source, 1)
+	{
+		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+		{
+			RANGE[..] => parse_usize_range(s.drop_while(ignore_chars))
+				.and_then(|r| if range.is_none() { range = Some(r); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			VISIBILITY[..] => parse_shader_stage_bits(s.drop_while(ignore_chars))
+				.and_then(|r| if vis.is_none() { vis = Some(r); Ok(()) } else { Err(ParseError::DefinitionOverrided) });
+			_ => Err(ParseError::UnknownConfig("PushConstantLayout"))
+		})).report_error(l);
+	}
+	range.ok_or(ParseError::ConfigRequired("Range"))
+	.and_then(|range| vis.ok_or(ParseError::ConfigRequired("Visibility")).map(|vis| PushConstantLayout { range: range, visibility: vis }))
 }
 fn parse_pipeline_layout(source: LazyLines)
 {

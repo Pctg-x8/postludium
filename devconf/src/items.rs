@@ -3,6 +3,7 @@ use super::ParseError;
 use parsetools::*;
 use vk::*;
 use super::{ignore_chars, ident_break};
+use std::ops::Range;
 
 #[cfg(test)] use itertools::Itertools;
 #[cfg(test)]
@@ -94,6 +95,25 @@ impl ConfigInt
 		ConfigInt::parse_array: "[1 2]" => Err(ParseError::DelimiterRequired(3)),
 		ConfigInt::parse_array: "[1," => Err(ParseError::IntValueRequired(3))
 	}
+}
+
+// Bytesize Range
+pub fn parse_usize_range(source: &mut ParseLine) -> Result<Range<usize>, ParseError>
+{
+	let s = source.take_while(|c| c.is_digit(10));
+	if s.is_empty() { Err(ParseError::BytesizeRequired(s.current())) }
+	else if source.drop_while(ignore_chars).starts_with(&['.', '.'])
+	{
+		let e = source.drop_opt(2).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+		if e.is_empty() { Err(ParseError::BytesizeRequired(e.current())) }
+		else
+		{
+			let (sn, en) = (s.clone_as_string().parse::<usize>(), e.clone_as_string().parse::<usize>());
+			sn.map_err(|se| ParseError::NumericParseError(se, s.current())).and_then(|s|
+				en.map_err(|ee| ParseError::NumericParseError(ee, e.current())).map(|e| s .. e))
+		}
+	}
+	else { Err(ParseError::Expected("Bytesize Range", source.current())) }
 }
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
