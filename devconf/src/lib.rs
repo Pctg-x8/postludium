@@ -77,11 +77,12 @@ impl PreciseRenderPassRef
 {
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
+		let inloc = source.current();
 		ConfigInt::parse(source).and_then(|r| if source.drop_while(ignore_chars).front() == Some('.')
 		{
 			ConfigInt::parse(source.drop_opt(1).drop_while(ignore_chars)).map(|s| PreciseRenderPassRef { rp: r, subpass: s })
 		}
-		else { Err(ParseError::Expected("PreciseRenderPassRef", source.current())) })
+		else { Err(ParseError::Expected("PreciseRenderPassRef", inloc)) })
 	}
 }
 #[test] fn parse_precise_renderpass_ref()
@@ -235,7 +236,7 @@ impl AttachmentBlendState
 		AttachmentBlendState::parse: "None" => Err(ParseError::Expected("AttachmentBlendState Constant", 0)),
 		AttachmentBlendState::parse_array: "[]" => Ok(Vec::new()),
 		AttachmentBlendState::parse_array: "[Alpha]" => Ok(vec![AttachmentBlendState::Alpha]),
-		AttachmentBlendState::parse_array: "[" => Err(ParseError::ClosingRequired(1)),
+		AttachmentBlendState::parse_array: "[" => Err(ParseError::Expected("AttachmentBlendState Constant", 1)),
 		AttachmentBlendState::parse_array: "" => Err(ParseError::Expected("Array of AttachmentBlendState Constant", 0))
 	}
 }
@@ -306,7 +307,7 @@ fn parse_offset2(source: &mut ParseLine) -> Result<(i32, i32), ParseError>
 		parse_size3f: "(0.0, 0.0, 1.0)" => Ok((0.0f32, 0.0, 1.0)),
 		parse_size3f: "0.0" => Err(ParseError::Expected("Size3F", 0)),
 		parse_size3f: "(0.0 " => Err(ParseError::Expected("\",\"", 5)),
-		parse_size3f: "(0, 0.0, 0.0" => Err(ParseError::ClosingRequired(14)),
+		parse_size3f: "(0, 0.0, 0.0" => Err(ParseError::ClosingRequired(12)),
 		parse_offset2: "(0, 0)" => Ok((0, 0)),
 		parse_offset2: "0" => Err(ParseError::Expected("Offset2", 0)),
 		parse_offset2: "(0 " => Err(ParseError::Expected("\",\"", 3)),
@@ -408,7 +409,7 @@ fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, P
 fn ignore_chars(c: char) -> bool { c == ' ' || c == '\t' }
 fn ident_break(c: char) -> bool
 {
-	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || ignore_chars(c)
+	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
 }
 fn parse_device_resource(mut source: LazyLines)
 {
