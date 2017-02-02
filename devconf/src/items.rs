@@ -115,6 +115,16 @@ pub fn parse_usize_range(source: &mut ParseLine) -> Result<Range<usize>, ParseEr
 	}
 	else { Err(ParseError::Expected("Bytesize Range", source.current())) }
 }
+#[test] fn usize_range()
+{
+	Testing!
+	{
+		parse_usize_range: "0 .. 16" => Ok(0usize .. 16usize),
+		parse_usize_range: "n .. m" => Err(ParseError::BytesizeRequired(0)),
+		parse_usize_range: "4" => Err(ParseError::Expected("Bytesize Range", 1)),
+		parse_usize_range: "4 ..n" => Err(ParseError::BytesizeRequired(4))
+	}
+}
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub enum PixelFormat { Ref(String), Value(VkFormat) }
