@@ -132,6 +132,13 @@ pub struct PipelineShaderStageInfo
 	asset: AssetResource, consts: HashMap<u32, NumericLiteral>
 }
 #[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PipelineStateInfo
+{
+	vertex_shader: PipelineShaderStageInfo, geometry_shader: Option<PipelineShaderStageInfo>, fragment_shader: Option<PipelineShaderStageInfo>,
+	tesscontrol_shader: Option<PipelineShaderStageInfo>, tessevaluation_shader: Option<PipelineShaderStageInfo>,
+	primitive_topology: VkPrimitiveTopology, viewport_scissors: Vec<ViewportScissorEntry>, blendstates: Vec<AttachmentBlendState>
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub enum ViewportScissorEntry
 {
 	ScreenView,
@@ -436,7 +443,7 @@ fn parse_unnamed_device_resource(current: usize, source: &mut ParseLine, mut res
 		"PushConstantLayout" => { parse_push_constant_layout(&mut rest).report_error(current); },
 		"PipelineLayout" => { parse_pipeline_layout(&mut rest); },
 		"DescriptorSets" => { parse_descriptor_sets(&mut rest); },
-		"PipelineState" => parse_pipeline_state(current, source.drop_while(ignore_chars), &mut rest),
+		"PipelineState" => { parse_pipeline_state(current, source.drop_while(ignore_chars), &mut rest); },
 		"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(current); },
 		"Framebuffer" => { parse_framebuffer(source.drop_while(ignore_chars), &mut rest).report_error(current); }
 		_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(current)
@@ -758,7 +765,7 @@ fn parse_descriptor_sets(source: &mut LazyLines) -> DescriptorSetsInfo
 	}
 	DescriptorSetsInfo(entries)
 }
-fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: &mut LazyLines)
+fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: &mut LazyLines) -> PipelineStateInfo
 {
 	// "PipelineState" v"for" precise_rpref "with" int <LF>
 	let r = if source.starts_with_trailing_opt(&['f', 'o', 'r'], ident_break)
@@ -797,7 +804,14 @@ fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: &mut 
 			_ => Err(ParseError::UnknownConfig("PipelineState"))
 		}).report_error(l);
 	}
-	unimplemented!();
+
+	vsinfo.ok_or(ParseError::ConfigRequired("VertexShader")).and_then(|vsinfo|
+	primt.ok_or(ParseError::ConfigRequired("PrimitiveTopology")).map(|primt| PipelineStateInfo
+	{
+		vertex_shader: vsinfo, fragment_shader: fsinfo, geometry_shader: gsinfo,
+		tesscontrol_shader: tcsinfo, tessevaluation_shader: tesinfo,
+		primitive_topology: primt, viewport_scissors: vpsc, blendstates: blends
+	})).report_error(current)
 }
 fn parse_pipeline_shaderstage_info(source: &mut ParseLine, lines: &mut LazyLines) -> Result<PipelineShaderStageInfo, ParseError>
 {
