@@ -90,7 +90,7 @@ impl PreciseRenderPassRef
 	{
 		PreciseRenderPassRef::parse: "0.1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Value(0), subpass: ConfigInt::Value(1) }),
 		PreciseRenderPassRef::parse: "$First .1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Ref("First".into()), subpass: ConfigInt::Value(1) }),
-		PreciseRenderPassRef::parse: "$Final" => Err(ParseError::Expected("PreciseRenderPassRef", source.current()))
+		PreciseRenderPassRef::parse: "$Final" => Err(ParseError::Expected("PreciseRenderPassRef", 0))
 	}
 }
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -878,6 +878,17 @@ fn parse_primitive_topology(source: &mut ParseLine) -> Result<VkPrimitiveTopolog
 		}
 	}
 }
+#[test] fn primitive_topology()
+{
+	Testing!
+	{
+		parse_primitive_topology: "PointList" => Ok(VkPrimitiveTopology::PointList),
+		parse_primitive_topology: "LineStrip with Adjacency" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
+		parse_primitive_topology: "PatchList with Adjacency" => Err(ParseError::UnknownPrimitiveTopology(true, 0)),
+		parse_primitive_topology: "PointStrip" => Err(ParseError::UnknownPrimitiveTopology(false, 0)),
+		parse_primitive_topology: "" => Err(ParseError::Expected("Primitive Topology", 0))
+	}
+}
 fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> Result<Vec<ViewportScissorEntry>, ParseError>
 {
 	let mut v = Vec::new();
@@ -912,17 +923,6 @@ fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> R
 		}
 	}
 	else { Err(ParseError::Expected("Array or Children, of ViewportScissor", current.current())) }
-}
-#[test] fn parse_primitive_topology()
-{
-	Testing!
-	{
-		parse_primitive_topology: "PointList" => Ok(VkPrimitiveTopology::PointList),
-		parse_primitive_topology: "LineStrip with Adjacency" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
-		parse_primitive_topology: "PatchList with Adjacency" => Err(ParseError::UnknownPrimitiveTopology(true, 0)),
-		parse_primitive_topology: "PointStrip" => Err(ParseError::UnknownPrimitiveTopology(false, 0)),
-		parse_primitive_topology: "" => Err(ParseError::Expected("Primitive Topology", 0))
-	}
 }
 
 lazy_static!
