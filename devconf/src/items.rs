@@ -141,14 +141,14 @@ impl NumericLiteral
 }
 #[test] fn parse_numeric()
 {
-	assert_eq!(NumericLiteral::parse(&"10".chars().collect(), false), Ok(NumericLiteral::Integer(10)));
-	assert_eq!(NumericLiteral::parse(&"10.0".chars().collect(), false), Ok(NumericLiteral::Floating(10.0)));
-	assert_eq!(NumericLiteral::parse(&"10.0".chars().collect(), true), Ok(NumericLiteral::Floating32(10.0)));
-	assert_eq!(NumericLiteral::parse(&"10f".chars().collect(), false), Ok(NumericLiteral::Floating(10.0)));
-	assert_eq!(NumericLiteral::parse(&"10f".chars().collect(), true), Ok(NumericLiteral::Floating32(10.0)));
-	assert_eq!(NumericLiteral::parse(&"10f32".chars().collect(), false), Ok(NumericLiteral::Floating32(10.0)));
-	assert_eq!(NumericLiteral::parse(&"10f64".chars().collect(), true), Ok(NumericLiteral::Floating(10.0)));
-	assert_eq!(NumericLiteral::parse(&"".chars().collect(), false), Err(ParseError::Expected("Numerical Value", 0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10".chars().collect(), 0), false), Ok(NumericLiteral::Integer(10)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10.0".chars().collect(), 0), false), Ok(NumericLiteral::Floating(10.0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10.0".chars().collect(), 0), true), Ok(NumericLiteral::Floating32(10.0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10f".chars().collect(), 0), false), Ok(NumericLiteral::Floating(10.0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10f".chars().collect(), 0), true), Ok(NumericLiteral::Floating32(10.0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10f32".chars().collect(), 0), false), Ok(NumericLiteral::Floating32(10.0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"10f64".chars().collect(), 0), true), Ok(NumericLiteral::Floating(10.0)));
+	assert_eq!(NumericLiteral::parse(&mut ParseLine(&"".chars().collect(), 0), false), Err(ParseError::Expected("Numerical Value", 0)));
 }
 #[derive(Debug, PartialEq)]
 pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
