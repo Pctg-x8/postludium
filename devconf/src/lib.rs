@@ -100,6 +100,10 @@ pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility
 pub struct PushConstantLayout { range: std::ops::Range<usize>, visibility: VkShaderStageFlags }
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct PipelineLayout { descs: Vec<ConfigInt>, pushconstants: Vec<ConfigInt> }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct DescriptorSetsInfo(Vec<DescriptorSetEntry>);
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct DescriptorSetEntry { name: Option<String>, layout: ConfigInt }
 
 pub struct NamedConfigLine<C> { name: Option<String>, config: C }
 impl<C> NamedConfigLine<C>
@@ -224,7 +228,7 @@ fn parse_unnamed_device_resource(current: usize, source: &mut ParseLine, mut res
 		"DescriptorSetLayout" => { parse_descriptor_set_layout(&mut rest); },
 		"PushConstantLayout" => { parse_push_constant_layout(&mut rest).report_error(current); },
 		"PipelineLayout" => { parse_pipeline_layout(&mut rest); },
-		"DescriptorSets" => parse_descriptor_sets(rest),
+		"DescriptorSets" => { parse_descriptor_sets(&mut rest); },
 		"PipelineState" => parse_pipeline_state(current, source.drop_while(ignore_chars), rest),
 		"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(current); },
 		"Framebuffer" => { parse_framebuffer(source.drop_while(ignore_chars), &mut rest).report_error(current); }
@@ -536,9 +540,16 @@ fn parse_pipeline_layout(source: &mut LazyLines) -> PipelineLayout
 	}
 	PipelineLayout { descs: desc, pushconstants: pcls }
 }
-fn parse_descriptor_sets(source: LazyLines)
+fn parse_descriptor_sets(source: &mut LazyLines) -> DescriptorSetsInfo
 {
-	unimplemented!();
+	let mut entries = Vec::new();
+	while let Some((l, mut s)) = acquire_line(source, 1)
+	{
+		entries.push(NamedConfigLine::parse(&mut s, ConfigInt::parse)
+			.map(|NamedConfigLine { name, config }| DescriptorSetEntry { name: name, layout: config })
+		.report_error(l));
+	}
+	DescriptorSetsInfo(entries)
 }
 fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: LazyLines)
 {
