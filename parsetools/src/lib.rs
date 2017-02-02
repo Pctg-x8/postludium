@@ -42,6 +42,7 @@ impl<'s> ParseLine<'s>
 	pub fn is_empty(&self) -> bool { self.0.is_empty() }
 	pub fn current(&self) -> usize { self.1 }
 	pub fn len(&self) -> usize { self.0.len() }
+	pub fn chars(&self) -> &'s [char] { self.0 }
 
 	pub fn peek(&self, offset: usize) -> Option<char> { if self.len() <= offset { None } else { Some(self.0[offset]) } }
 	pub fn front(&self) -> Option<char> { self.peek(0) }

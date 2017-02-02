@@ -96,6 +96,91 @@ impl ConfigInt
 		ConfigInt::parse_array: "[1," => Err(ParseError::IntValueRequired(3))
 	}
 }
+pub enum NumericLiteral { Integer(i64), Floating(f64), Floating32(f32) }
+impl NumericLiteral
+{
+	pub fn parse(input: &mut ParseLine, default32: bool) -> Result<Self, ParseError>
+	{
+		let s =
+		{
+			let ipart = input.take_while(|c| c.is_digit(10));
+			if ipart.is_empty() { Err(ParseError::Expected("Numerical Value", ipart.current())) }
+			else if input.front() == Some('.')
+			{
+				let fpart = input.drop_opt(1).take_while(|c| c.is_digit(10));
+				Ok((ipart.current(), true, ipart.chars().iter().chain(&['.']).chain(fpart.chars().iter()).cloned().collect::<String>()))
+			}
+			else { Ok((ipart.current(), false, ipart.clone_as_string())) }
+		};
+		s.and_then(|(l, f, s)| if input.starts_with(&['f', '3', '2'])
+		{
+			input.drop_opt(3); s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating32)
+		}
+		else if input.starts_with(&['f', '6', '4'])
+		{
+			input.drop_opt(3); s.parse::<f64>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating)
+		}
+		else if input.starts_with(&['f'])
+		{
+			input.drop_opt(1);
+			if default32 { s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating32) }
+			else { s.parse::<f64>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating) }
+		}
+		else if f
+		{
+			input.drop_opt(1);
+			if default32 { s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating32) }
+			else { s.parse::<f64>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating) }
+		}
+		else
+		{
+			s.parse::<i64>().map_err(|e| ParseError::NumericParseError(e, l)).map(NumericLiteral::Integer)
+		})
+	}
+}
+#[test] fn parse_numeric()
+{
+	assert_eq!(NumericLiteral::parse(&"10".chars().collect(), false), Ok(NumericLiteral::Integer(10)));
+	assert_eq!(NumericLiteral::parse(&"10.0".chars().collect(), false), Ok(NumericLiteral::Floating(10.0)));
+	assert_eq!(NumericLiteral::parse(&"10.0".chars().collect(), true), Ok(NumericLiteral::Floating32(10.0)));
+	assert_eq!(NumericLiteral::parse(&"10f".chars().collect(), false), Ok(NumericLiteral::Floating(10.0)));
+	assert_eq!(NumericLiteral::parse(&"10f".chars().collect(), true), Ok(NumericLiteral::Floating32(10.0)));
+	assert_eq!(NumericLiteral::parse(&"10f32".chars().collect(), false), Ok(NumericLiteral::Floating32(10.0)));
+	assert_eq!(NumericLiteral::parse(&"10f64".chars().collect(), true), Ok(NumericLiteral::Floating(10.0)));
+	assert_eq!(NumericLiteral::parse(&"".chars().collect(), false), Err(ParseError::Expected("Numerical Value", 0)));
+}
+pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
+impl AssetResource
+{
+	pub fn parse(input: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		if input.front() == Some('!')
+		{
+			input.drop_opt(1);
+			let mut nv = Vec::new();
+			loop
+			{
+				let s = input.take_until(ident_break);
+				if s.is_empty() { break; } else
+				{
+					nv.push(s.clone_as_string()); if input.front() == Some('.') { input.drop_opt(1); } else { break; }
+				}
+			}
+			if nv.is_empty() { Err(ParseError::Expected("Asset Path", input.current())) } else { Ok(AssetResource::PathRef(nv)) }
+		}
+		else { ConfigInt::parse(input).map(AssetResource::IntRef) }
+	}
+}
+#[test] fn parse_asset_resource()
+{
+	Testing!
+	{
+		AssetResource::parse: "!shaders.PureF" => Ok(AssetResource::PathRef(vec!["shaders".into(), "PureF".into()])),
+		AssetResource::parse: "$en" => Ok(AssetResource::IntRef(ConfigInt::Ref("en".into()))),
+		AssetResource::parse: "!" => Err(ParseError::Expected("Asset Path", 1)),
+		AssetResource::parse: "~" => Err(ParseError::IntValueRequired(0))
+	}
+}
 
 // Bytesize Range
 pub fn parse_usize_range(source: &mut ParseLine) -> Result<Range<usize>, ParseError>

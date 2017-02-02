@@ -72,6 +72,28 @@ pub struct SimpleRenderPassData { format: PixelFormat, clear_on_load: Option<boo
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct PresentedRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
 #[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PreciseRenderPassRef { rp: ConfigInt, subpass: ConfigInt }
+impl PreciseRenderPassRef
+{
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		ConfigInt::parse(source).and_then(|r| if source.drop_while(ignore_chars).front() == Some('.')
+		{
+			ConfigInt::parse(source.drop_opt(1).drop_while(ignore_chars)).map(|s| PreciseRenderPassRef { rp: r, subpass: s })
+		}
+		else { Err(ParseError::Expected("PreciseRenderPassRef", source.current())) })
+	}
+}
+#[test] fn parse_precise_renderpass_ref()
+{
+	Testing!
+	{
+		PreciseRenderPassRef::parse: "0.1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Value(0), subpass: ConfigInt::Value(1) }),
+		PreciseRenderPassRef::parse: "$First .1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Ref("First".into()), subpass: ConfigInt::Value(1) }),
+		PreciseRenderPassRef::parse: "$Final" => Err(ParseError::Expected("PreciseRenderPassRef", source.current()))
+	}
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub enum ExternalResourceData
 {
 	ImageView { dim: u8, refname: String }, SwapChainViews
@@ -104,6 +126,187 @@ pub struct PipelineLayout { descs: Vec<ConfigInt>, pushconstants: Vec<ConfigInt>
 pub struct DescriptorSetsInfo(Vec<DescriptorSetEntry>);
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct DescriptorSetEntry { name: Option<String>, layout: ConfigInt }
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct PipelineShaderStageInfo
+{
+	asset: AssetResource, consts: HashMap<u32, NumericLiteral>
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum ViewportScissorEntry
+{
+	ScreenView,
+	Custom(VkViewport, VkRect2D)
+}
+lazy_static!
+{
+	static ref SCREENVIEW: Vec<char> = "ScreenView".chars().collect();
+}
+impl ViewportScissorEntry
+{
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		// Size3F "-" Size3F [":" Offset2D "-" Offset2D] / "ScreenView"
+		if source.starts_with_trailing_opt(&SCREENVIEW, ident_break) { source.drop_opt(SCREENVIEW.len()); Ok(ViewportScissorEntry::ScreenView) }
+		else
+		{
+			let vport = parse_size3f(source)
+				.and_then(|vs| if source.drop_while(ignore_chars).front() != Some('-') { Err(ParseError::Expected("\"-\"", source.current())) }
+				else { parse_size3f(source.drop_opt(1).drop_while(ignore_chars)).map(|ve| (vs, ve)) });
+			
+			vport.and_then(|((sx, sy, sz), (dx, dy, dz))| if source.drop_while(ignore_chars).front() == Some(':')
+			{
+				parse_offset2(source.drop_opt(1).drop_while(ignore_chars))
+					.and_then(|(ssx, ssy)| if source.drop_while(ignore_chars).front() != Some('-') { Err(ParseError::Expected("\"-\"", source.current())) }
+					else
+					{
+						parse_offset2(source.drop_opt(1).drop_while(ignore_chars))
+							.map(|(sdx, sdy)| VkRect2D(VkOffset2D(ssx, ssy), VkExtent2D((sdx - ssx) as u32, (sdy - ssy) as u32)))
+					})
+			} else { Ok(VkRect2D(VkOffset2D(sx as i32, sy as i32), VkExtent2D((dx - sx) as u32, (dy - sy) as u32))) }
+			.map(|sc| ViewportScissorEntry::Custom(VkViewport(sx, sy, dx - sx, dy - sy, sz, dz), sc)))
+		}
+	}
+}
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub enum AttachmentBlendState
+{
+	Disabled, Alpha, PremultipliedAlpha
+}
+lazy_static!
+{
+	static ref DISABLED: Vec<char> = "Disabled".chars().collect();
+	static ref ALPHA: Vec<char> = "Alpha".chars().collect();
+	static ref PREMULTIPLIEDALPHA: Vec<char> = "PremultipliedAlpha".chars().collect();
+}
+impl AttachmentBlendState
+{
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		// "Disabled" / "Alpha" / "PremultipliedAlpha"
+		let s = source.take_until(ident_break);
+		PartialEqualityMatchMap!(s;
+		{
+			DISABLED[..] => Ok(AttachmentBlendState::Disabled),
+			ALPHA[..] => Ok(AttachmentBlendState::Alpha),
+			PREMULTIPLIEDALPHA[..] => Ok(AttachmentBlendState::PremultipliedAlpha);
+			_ => Err(ParseError::Expected("AttachmentBlendState Constant", s.current()))
+		})
+	}
+	fn parse_array(source: &mut ParseLine) -> Result<Vec<Self>, ParseError>
+	{
+		// "[" blendstate,* "]"
+		if source.front() != Some('[') { Err(ParseError::Expected("Array of AttachmentBlendState Constant", source.current())) }
+		else
+		{
+			fn recursive(source: &mut ParseLine, sink: &mut Vec<AttachmentBlendState>) -> Result<(), ParseError>
+			{
+				AttachmentBlendState::parse(source).and_then(|abs|
+				{
+					sink.push(abs);
+					if source.drop_while(ignore_chars).front() == Some(',') { recursive(source.drop_opt(1).drop_while(ignore_chars), sink) }
+					else { Ok(()) }
+				})
+			}
+			if source.drop_opt(1).drop_while(ignore_chars).front() == Some(']') { Ok(Vec::new()) }
+			else
+			{
+				let mut v = Vec::new();
+				match recursive(source, &mut v)
+				{
+					Ok(_) => Ok(v),
+					Err(e) => Err(e)
+				}
+			}
+		}
+	}
+}
+#[test] fn blendstate()
+{
+	Testing!
+	{
+		AttachmentBlendState::parse: "Disabled" => Ok(AttachmentBlendState::Disabled),
+		AttachmentBlendState::parse: "None" => Err(ParseError::Expected("AttachmentBlendState Constant", 0)),
+		AttachmentBlendState::parse_array: "[]" => Ok(Vec::new()),
+		AttachmentBlendState::parse_array: "[Alpha]" => Ok(vec![AttachmentBlendState::Alpha]),
+		AttachmentBlendState::parse_array: "[" => Err(ParseError::ClosingRequired(1)),
+		AttachmentBlendState::parse_array: "" => Err(ParseError::Expected("Array of AttachmentBlendState Constant", 0))
+	}
+}
+
+fn parse_size3f(source: &mut ParseLine) -> Result<(f32, f32, f32), ParseError>
+{
+	// "(" f32 "," f32 "," f32 ")"
+	if source.front() != Some('(') { Err(ParseError::Expected("Size3F", source.current())) }
+	else
+	{
+		let x = source.drop_opt(1).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+		let s = if source.front() == Some('.')
+		{
+			let fp = source.drop_opt(1).take_while(|c| c.is_digit(10));
+			x.chars().iter().chain(&['.']).chain(fp.chars().iter()).cloned().collect()
+		}
+		else { x.clone_as_string() };
+		s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, x.current()))
+	}.and_then(|x| if source.drop_while(ignore_chars).front() != Some(',') { Err(ParseError::Expected("\",\"", source.current())) }
+	else
+	{
+		let y = source.drop_opt(1).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+		let s = if source.front() == Some('.')
+		{
+			let fp = source.drop_opt(1).take_while(|c| c.is_digit(10));
+			y.chars().iter().chain(&['.']).chain(fp.chars().iter()).cloned().collect()
+		}
+		else { y.clone_as_string() };
+		s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, y.current())).map(|y| (x, y))
+	}).and_then(|(x, y)| if source.drop_while(ignore_chars).front() != Some(',') { Err(ParseError::Expected("\",\"", source.current())) }
+	else
+	{
+		let z = source.drop_opt(1).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+		let s = if source.front() == Some('.')
+		{
+			let fp = source.drop_opt(1).take_while(|c| c.is_digit(10));
+			z.chars().iter().chain(&['.']).chain(fp.chars().iter()).cloned().collect()
+		}
+		else { z.clone_as_string() };
+		s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, z.current())).map(|z| (x, y, z))
+	}).and_then(|v| if source.drop_while(ignore_chars).front() != Some(')') { Err(ParseError::ClosingRequired(source.current())) }
+	else { Ok(v) })
+}
+fn parse_offset2(source: &mut ParseLine) -> Result<(i32, i32), ParseError>
+{
+	// "(" i32 "," i32 ")"
+	if source.front() != Some('(') { Err(ParseError::Expected("Offset2", source.current())) }
+	else
+	{
+		let inv = source.drop_opt(1).drop_while(ignore_chars).front() == Some('-');
+		if inv { source.drop_opt(1); }
+		let x = source.drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+		x.clone_as_string().parse::<i32>().map_err(|e| ParseError::NumericParseError(e, x.current())).map(|e| if inv { -e } else { e })
+	}.and_then(|x| if source.drop_while(ignore_chars).front() != Some(',') { Err(ParseError::Expected("\",\"", source.current())) }
+	else
+	{
+		let inv = source.drop_opt(1).drop_while(ignore_chars).front() == Some('-');
+		if inv { source.drop_opt(1); }
+		let y = source.drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+		y.clone_as_string().parse::<i32>().map_err(|e| ParseError::NumericParseError(e, y.current())).map(|e| if inv { (x, -e) } else { (x, e) })
+	}).and_then(|v| if source.drop_while(ignore_chars).front() != Some(')') { Err(ParseError::ClosingRequired(source.current())) }
+	else { Ok(v) })
+}
+#[test] fn parse_coord_primitives()
+{
+	Testing!
+	{
+		parse_size3f: "(0.0, 0.0, 1.0)" => Ok((0.0f32, 0.0, 1.0)),
+		parse_size3f: "0.0" => Err(ParseError::Expected("Size3F", 0)),
+		parse_size3f: "(0.0 " => Err(ParseError::Expected("\",\"", 5)),
+		parse_size3f: "(0, 0.0, 0.0" => Err(ParseError::ClosingRequired(14)),
+		parse_offset2: "(0, 0)" => Ok((0, 0)),
+		parse_offset2: "0" => Err(ParseError::Expected("Offset2", 0)),
+		parse_offset2: "(0 " => Err(ParseError::Expected("\",\"", 3)),
+		parse_offset2: "(0, 0, 0" => Err(ParseError::ClosingRequired(5)),
+		parse_offset2: "(0, 0 " => Err(ParseError::ClosingRequired(6))
+	}
+}
 
 pub struct NamedConfigLine<C> { name: Option<String>, config: C }
 impl<C> NamedConfigLine<C>
@@ -132,11 +335,12 @@ impl<C> NamedConfigLine<C>
 pub enum ParseError
 {
 	UnexpectedHead, NameRequired(usize), UnknownDeviceResource(usize), UnknownFormat(usize), UnknownImageLayout(usize), IntValueRequired(usize),
-	UnknownRenderPassAttachmentOptions(usize), ImageLayoutRequired(usize), DirectionRequired(usize), NumericParseError(std::num::ParseIntError, usize),
+	UnknownRenderPassAttachmentOptions(usize), ImageLayoutRequired(usize), DirectionRequired(usize),
+	NumericParseError(std::num::ParseIntError, usize), FloatingParseError(std::num::ParseFloatError, usize),
 	DelimiterRequired(usize), ClosingRequired(usize), DefinitionOverrided, CorruptedSubpassDesc(usize),
 	UnknownPipelineStageFlag(usize), UnknownAccessFlag(usize), Expected(&'static str, usize), UnknownConfig(&'static str), ConfigRequired(&'static str),
 	UnknownExternalResource(usize), UnknownClearMode(usize), FormatRequired(usize), UnknownObjectRef(&'static str, usize), UnknownShaderStageFlag(usize),
-	UnknownDescriptorKind(usize), BytesizeRequired(usize)
+	UnknownDescriptorKind(usize), BytesizeRequired(usize), UnknownPrimitiveTopology(bool, usize)
 }
 trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
 impl<T> DivergenceExt<T> for Result<T, ParseError>
@@ -167,8 +371,11 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 			Err(ParseError::UnknownShaderStageFlag(p)) => panic!("Unknown Shader Stage Flag was found at line {}, col {}", line, p),
 			Err(ParseError::UnknownDescriptorKind(p)) => panic!("Unknown Descriptor Kind was found at line {}, col {}", line, p),
 			Err(ParseError::FormatRequired(p)) => panic!("Format required for RenderPass Attachment at line {}, col {}", line, p),
+			Err(ParseError::UnknownPrimitiveTopology(true, p)) => panic!("Unknown Primitive Topology with Adjacency was found at line {}, col {}", line, p),
+			Err(ParseError::UnknownPrimitiveTopology(false, p)) => panic!("Unknown Primitive Topology was found at line {}, col {}", line, p),
 			Err(ParseError::UnknownObjectRef(n, p)) => panic!("Unknown {} ref at line {}, col {}", n, line, p),
 			Err(ParseError::NumericParseError(n, p)) => panic!("NumericParseError: {} at line {}, col {}", n, line, p),
+			Err(ParseError::FloatingParseError(n, p)) => panic!("FloatingParseError: {} at line {}, col {}", n, line, p),
 			Err(ParseError::Expected(s, p)) => panic!("Expected {}, but it was not found at line {}, col {}", s, line, p),
 			Err(ParseError::UnknownConfig(s)) => panic!("Unknown Config for {} was found at line {}", s, line),
 			Err(ParseError::ConfigRequired(c)) => panic!("Configuration \"{}\" required at line {}", c, line)
@@ -229,7 +436,7 @@ fn parse_unnamed_device_resource(current: usize, source: &mut ParseLine, mut res
 		"PushConstantLayout" => { parse_push_constant_layout(&mut rest).report_error(current); },
 		"PipelineLayout" => { parse_pipeline_layout(&mut rest); },
 		"DescriptorSets" => { parse_descriptor_sets(&mut rest); },
-		"PipelineState" => parse_pipeline_state(current, source.drop_while(ignore_chars), rest),
+		"PipelineState" => parse_pipeline_state(current, source.drop_while(ignore_chars), &mut rest),
 		"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(current); },
 		"Framebuffer" => { parse_framebuffer(source.drop_while(ignore_chars), &mut rest).report_error(current); }
 		_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(current)
@@ -551,9 +758,157 @@ fn parse_descriptor_sets(source: &mut LazyLines) -> DescriptorSetsInfo
 	}
 	DescriptorSetsInfo(entries)
 }
-fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: LazyLines)
+fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: &mut LazyLines)
 {
+	// "PipelineState" v"for" precise_rpref "with" int <LF>
+	let r = if source.starts_with_trailing_opt(&['f', 'o', 'r'], ident_break)
+	{
+		PreciseRenderPassRef::parse(source.drop_opt(3).drop_while(ignore_chars))
+	}
+	else { Err(ParseError::Expected("\"for\"", source.current())) };
+	let rpl = r.and_then(|rp| if source.drop_while(ignore_chars).starts_with_trailing_opt(&['w', 'i', 't', 'h'], ident_break)
+	{
+		ConfigInt::parse(source.drop_opt(4).drop_while(ignore_chars)).map(|l| (rp, l))
+	}
+	else { Err(ParseError::Expected("\"with\"", source.current())) }).report_error(current);
+
+	let (mut vsinfo, mut fsinfo, mut gsinfo, mut tcsinfo, mut tesinfo) = (None, None, None, None, None);
+	let (mut primt, mut vpsc, mut blends) = (None, Vec::new(), Vec::new());
+	while let Some((l, mut s)) = acquire_line(restlines, 1)
+	{
+		parse_config_name(&mut s).and_then(|name| match name.clone_as_string().as_ref()
+		{
+			"VertexShader" => parse_pipeline_shaderstage_info(s.drop_while(ignore_chars), restlines)
+				.and_then(|s| if vsinfo.is_none() { vsinfo = Some(s); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"FragmentShader" => parse_pipeline_shaderstage_info(s.drop_while(ignore_chars), restlines)
+				.and_then(|s| if fsinfo.is_none() { fsinfo = Some(s); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"GeometryShader" => parse_pipeline_shaderstage_info(s.drop_while(ignore_chars), restlines)
+				.and_then(|s| if gsinfo.is_none() { gsinfo = Some(s); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"TessellationControlShader" => parse_pipeline_shaderstage_info(s.drop_while(ignore_chars), restlines)
+				.and_then(|s| if tcsinfo.is_none() { tcsinfo = Some(s); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"TessellationEvaluationShader" => parse_pipeline_shaderstage_info(s.drop_while(ignore_chars), restlines)
+				.and_then(|s| if tesinfo.is_none() { tesinfo = Some(s); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"PrimitiveTopology" => parse_primitive_topology(s.drop_while(ignore_chars))
+				.and_then(|s| if primt.is_none() { primt = Some(s); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"ViewportScissors" => parse_viewport_scissors(s.drop_while(ignore_chars), restlines)
+				.and_then(|v| if vpsc.is_empty() { vpsc = v; Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			"BlendStates" => AttachmentBlendState::parse_array(s.drop_while(ignore_chars))
+				.and_then(|v| if blends.is_empty() { blends = v; Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
+			_ => Err(ParseError::UnknownConfig("PipelineState"))
+		}).report_error(l);
+	}
 	unimplemented!();
+}
+fn parse_pipeline_shaderstage_info(source: &mut ParseLine, lines: &mut LazyLines) -> Result<PipelineShaderStageInfo, ParseError>
+{
+	AssetResource::parse(source).map(|a|
+	{
+		let mut consts = HashMap::new();
+		while let Some((l, mut s)) = acquire_line(lines, 2)
+		{
+			if s.starts_with(&['C', 'o', 'n', 's', 't', 'a', 'n', 't'])
+			{
+				let n = s.drop_opt(8).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+				if n.is_empty() { Err(ParseError::IntValueRequired(n.current())) }
+				else
+				{
+					n.clone_as_string().parse::<u32>().map_err(|e| ParseError::NumericParseError(e, n.current())).and_then(|n|
+					{
+						if s.drop_while(ignore_chars).front() == Some(':')
+						{
+							NumericLiteral::parse(s.drop_opt(1).drop_while(ignore_chars), true).and_then(|v| if consts.contains_key(&n)
+							{
+								Err(ParseError::DefinitionOverrided)
+							} else { consts.insert(n, v); Ok(()) })
+						}
+						else { Err(ParseError::Expected(":", s.current())) }
+					})
+				}
+			}
+			else { Err(ParseError::UnknownConfig("Shader Module")) }.report_error(l);
+		}
+		PipelineShaderStageInfo { asset: a, consts: consts }
+	})
+}
+fn parse_primitive_topology(source: &mut ParseLine) -> Result<VkPrimitiveTopology, ParseError>
+{
+	// ident ["with" "Adjacency"]
+	let prim = source.take_until(ident_break);
+	if prim.is_empty() { Err(ParseError::Expected("Primitive Topology", prim.current())) }
+	else if source.drop_while(ignore_chars).starts_with_trailing_opt(&['w', 'i', 't', 'h'], ident_break)
+	{
+		if source.drop_opt(4).drop_while(ignore_chars).starts_with_trailing_opt(&['A', 'd', 'j', 'a', 'c', 'e', 'n', 'c', 'y'], ident_break)
+		{
+			match prim.clone_as_string().as_ref()
+			{
+				"LineList" => Ok(VkPrimitiveTopology::LineListWithAdjacency),
+				"LineStrip" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
+				"TriangleList" => Ok(VkPrimitiveTopology::TriangleListWithAdjacency),
+				"TriangleStrip" => Ok(VkPrimitiveTopology::TriangleStripWithAdjacency),
+				_ => Err(ParseError::UnknownPrimitiveTopology(true, prim.current()))
+			}
+		} else { Err(ParseError::Expected("\"Adjacency\"", source.current())) }
+	}
+	else
+	{
+		match prim.clone_as_string().as_ref()
+		{
+			"PointList" => Ok(VkPrimitiveTopology::PointList),
+			"LineList" => Ok(VkPrimitiveTopology::LineList),
+			"LineStrip" => Ok(VkPrimitiveTopology::LineStrip),
+			"TriangleList" => Ok(VkPrimitiveTopology::TriangleList),
+			"TriangleStrip" => Ok(VkPrimitiveTopology::TriangleStrip),
+			"TriangleFan" => Ok(VkPrimitiveTopology::TriangleFan),
+			"PatchList" => Ok(VkPrimitiveTopology::PatchList),
+			_ => Err(ParseError::UnknownPrimitiveTopology(false, prim.current()))
+		}
+	}
+}
+fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> Result<Vec<ViewportScissorEntry>, ParseError>
+{
+	let mut v = Vec::new();
+	if current.front() == None
+	{
+		// Descending
+		while let Some((l, mut s)) = acquire_line(source, 2)
+		{
+			v.push(ViewportScissorEntry::parse(&mut s).report_error(l));
+		}
+		Ok(v)
+	}
+	else if current.front() == Some('[')
+	{
+		// Array Parsing
+		fn recursive(current: &mut ParseLine, sink: &mut Vec<ViewportScissorEntry>) -> Result<(), ParseError>
+		{
+			ViewportScissorEntry::parse(current).and_then(|ent|
+			{
+				sink.push(ent);
+				if current.drop_while(ignore_chars).front() == Some(',')
+				{
+					recursive(current.drop_opt(1).drop_while(ignore_chars), sink)
+				}
+				else { Ok(()) }
+			})
+		}
+		match recursive(current.drop_opt(1).drop_while(ignore_chars), &mut v)
+		{
+			Ok(()) => if current.front() == Some(']') { Ok(v) } else { Err(ParseError::ClosingRequired(current.current())) },
+			Err(e) => Err(e)
+		}
+	}
+	else { Err(ParseError::Expected("Array or Children, of ViewportScissor", current.current())) }
+}
+#[test] fn parse_primitive_topology()
+{
+	Testing!
+	{
+		parse_primitive_topology: "PointList" => Ok(VkPrimitiveTopology::PointList),
+		parse_primitive_topology: "LineStrip with Adjacency" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
+		parse_primitive_topology: "PatchList with Adjacency" => Err(ParseError::UnknownPrimitiveTopology(true, 0)),
+		parse_primitive_topology: "PointStrip" => Err(ParseError::UnknownPrimitiveTopology(false, 0)),
+		parse_primitive_topology: "" => Err(ParseError::Expected("Primitive Topology", 0))
+	}
 }
 
 lazy_static!
