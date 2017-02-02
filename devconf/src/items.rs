@@ -129,7 +129,6 @@ impl NumericLiteral
 		}
 		else if f
 		{
-			input.drop_opt(1);
 			if default32 { s.parse::<f32>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating32) }
 			else { s.parse::<f64>().map_err(|e| ParseError::FloatingParseError(e, l)).map(NumericLiteral::Floating) }
 		}
