@@ -1,4 +1,6 @@
 
+#[cfg(test)] extern crate itertools;
+
 mod lazylines;
 pub use lazylines::LazyLines;
 

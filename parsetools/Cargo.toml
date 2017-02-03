@@ -4,4 +4,5 @@ version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 description = "Postludium: Common ParseTools"
 
-[dependencies]
+[dev-dependencies]
+itertools = "0.5.6"

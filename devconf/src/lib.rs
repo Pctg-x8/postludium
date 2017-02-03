@@ -375,7 +375,7 @@ fn ident_break(c: char) -> bool
 {
 	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
 }
-fn parse_device_resource(mut source: LazyLines)
+pub fn parse_device_resource(mut source: LazyLines)
 {
 	if let Some((l, s)) = source.pop()
 	{
@@ -455,61 +455,45 @@ fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 	let mut rpd = RenderPassData { attachments: NamedContents::new(), passes: NamedContents::new(), deps: Vec::new() };
 	while let Some((l, mut s)) = acquire_line(source, 1)
 	{
-		parse_config_name(&mut s).and_then(|name|
-			if name == ATTACHMENTS[..]
+		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+		{
+			ATTACHMENTS[..] => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+			else
 			{
-				if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
-				else
+				while let Some((l, mut s)) = acquire_line(source, 2)
 				{
-					while let Some((l, mut s)) = acquire_line(source, 2)
+					match NamedConfigLine::parse(&mut s, parse_rp_attachment).report_error(l)
 					{
-						match NamedConfigLine::parse(&mut s, parse_rp_attachment)
-						{
-							Ok(NamedConfigLine { name: Some(name), config }) => { rpd.attachments.insert(name.into(), config); },
-							Ok(NamedConfigLine { config, .. }) => { rpd.attachments.insert_unnamed(config); },
-							Err(ParseError::UnexpectedHead) => break,
-							e => { e.report_error(l); }
-						}
+						NamedConfigLine { name: Some(name), config } => { rpd.attachments.insert(name.into(), config); },
+						NamedConfigLine { config, .. } => { rpd.attachments.insert_unnamed(config); }
 					}
 				}
 				Ok(())
-			}
-			else if name == SUBPASSES[..]
+			},
+			SUBPASSES[..] => if !rpd.passes.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+			else
 			{
-				if !rpd.passes.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
-				else
+				while let Some((l, mut s)) = acquire_line(source, 2)
 				{
-					while let Some((l, mut s)) = acquire_line(source, 2)
+					match NamedConfigLine::parse(&mut s, parse_subpass_desc).report_error(l)
 					{
-						match NamedConfigLine::parse(&mut s, parse_subpass_desc)
-						{
-							Ok(NamedConfigLine { name: Some(name), config }) => { rpd.passes.insert(name.into(), config); },
-							Ok(NamedConfigLine { config, .. }) => { rpd.passes.insert_unnamed(config); },
-							Err(ParseError::UnexpectedHead) => break,
-							e => { e.report_error(l); }
-						}
+						NamedConfigLine { name: Some(name), config } => { rpd.passes.insert(name.into(), config); },
+						NamedConfigLine { config, .. } => { rpd.passes.insert_unnamed(config); }
 					}
 				}
 				Ok(())
-			}
-			else if name == DEPENDENCIES[..]
+			},
+			DEPENDENCIES[..] => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+			else
 			{
-				if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
-				else
+				while let Some((l, mut s)) = acquire_line(source, 2)
 				{
-					while let Some((l, mut s)) = acquire_line(source, 2)
-					{
-						match parse_subpass_deps(&mut s)
-						{
-							Ok(c) => { rpd.deps.push(c); },
-							e => { e.report_error(l); }
-						}
-					}
+					parse_subpass_deps(&mut s).map(|c| rpd.deps.push(c)).report_error(l);
 				}
 				Ok(())
-			}
-			else { Err(ParseError::UnknownConfig("RenderPass")) }
-		).report_error(l);
+			};
+			_ => Err(ParseError::UnknownConfig("RenderPass"))
+		})).report_error(l);
 	}
 	rpd
 }

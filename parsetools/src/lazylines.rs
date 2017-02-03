@@ -17,7 +17,7 @@ impl<'a> LazyLines<'a>
 	fn fetch_line(&mut self) -> &'a [char]
 	{
 		let mut counter = 0;
-		while let Some(c) = self.source.front()
+		while let Some(c) = self.source.peek(counter)
 		{
 			if c == '\n' { break; }
 			counter += 1;
@@ -70,5 +70,19 @@ impl<'a> LazyLines<'a>
 			}
 		}
 		else { self.cache = None; }
+	}
+}
+
+#[cfg(test)] mod tests
+{
+	use super::*;
+	use itertools::Itertools;
+
+	#[test] fn drop_line()
+	{
+		let case = "a\nb\n".chars().collect_vec();
+		let mut ll = LazyLines::new(&case);
+		ll.drop_line();
+		assert_eq!(ll.next(), Some((2, &['b'][..])));
 	}
 }
