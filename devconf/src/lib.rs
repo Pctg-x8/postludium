@@ -11,9 +11,9 @@ use std::borrow::Cow;
 use vk::*;
 
 #[macro_use] mod items;
-use self::items::*;
+pub use items::*;
 mod hobjects;
-use self::hobjects::*;
+pub use hobjects::*;
 
 pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
 impl<T> std::ops::Index<usize> for NamedContents<T>
@@ -60,18 +60,18 @@ pub struct DeviceResources
 
 // Source Representations
 #[derive(Debug, PartialEq)]
-pub struct RPAttachment { format: PixelFormat, layouts: Transition<VkImageLayout>, clear_on_load: Option<bool>, preserve_content: bool }
+pub struct RPAttachment { pub format: PixelFormat, pub layouts: Transition<VkImageLayout>, pub clear_on_load: Option<bool>, pub preserve_content: bool }
 #[derive(Debug, PartialEq)]
-pub struct RPSubpassDesc { color_outs: Vec<ConfigInt>, inputs: Vec<ConfigInt> }
+pub struct RPSubpassDesc { pub color_outs: Vec<ConfigInt>, pub inputs: Vec<ConfigInt> }
 #[derive(Debug, PartialEq)]
-pub struct RPSubpassDeps { passtrans: Transition<ConfigInt>, access_mask: Transition<VkAccessFlags>, stage_bits: VkPipelineStageFlags, by_region: bool }
-pub struct RenderPassData { attachments: NamedContents<RPAttachment>, passes: NamedContents<RPSubpassDesc>, deps: Vec<RPSubpassDeps> }
+pub struct RPSubpassDeps { pub passtrans: Transition<ConfigInt>, pub access_mask: Transition<VkAccessFlags>, pub stage_bits: VkPipelineStageFlags, pub by_region: bool }
+pub struct RenderPassData { pub attachments: NamedContents<RPAttachment>, pub subpasses: NamedContents<RPSubpassDesc>, pub deps: Vec<RPSubpassDeps> }
 #[derive(Debug, PartialEq)]
-pub struct SimpleRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
+pub struct SimpleRenderPassData { pub format: PixelFormat, pub clear_on_load: Option<bool> }
 #[derive(Debug, PartialEq)]
-pub struct PresentedRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
+pub struct PresentedRenderPassData { pub format: PixelFormat, pub clear_on_load: Option<bool> }
 #[derive(Debug, PartialEq)]
-pub struct PreciseRenderPassRef { rp: ConfigInt, subpass: ConfigInt }
+pub struct PreciseRenderPassRef { pub rp: ConfigInt, pub subpass: ConfigInt }
 impl PreciseRenderPassRef
 {
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
@@ -326,7 +326,7 @@ impl NamedConfigLine<()>
 #[derive(Debug, PartialEq)]
 pub enum ParseError
 {
-	UnexpectedHead, NameRequired(usize), UnknownDeviceResource(usize), UnknownFormat(usize), UnknownImageLayout(usize), IntValueRequired(usize),
+	NameRequired(usize), UnknownDeviceResource(usize), UnknownFormat(usize), UnknownImageLayout(usize), IntValueRequired(usize),
 	UnknownRenderPassAttachmentOptions(usize), ImageLayoutRequired(usize), DirectionRequired(usize),
 	NumericParseError(std::num::ParseIntError, usize), FloatingParseError(std::num::ParseFloatError, usize),
 	DelimiterRequired(usize), ClosingRequired(usize), DefinitionOverrided, CorruptedSubpassDesc(usize),
@@ -342,7 +342,6 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 		match self
 		{
 			Ok(t) => t,
-			Err(ParseError::UnexpectedHead) => panic!("Unexpected character at head of line {}", line),
 			Err(ParseError::NameRequired(p)) => panic!("Name required following $ at line {}, col {}", line, p),
 			Err(ParseError::UnknownDeviceResource(p)) => panic!("Unknown Device Resource was found at line {}, col {}", line, p),
 			Err(ParseError::UnknownFormat(p)) => panic!("Unknown Image Format was found at line {}, col {}", line, p),
@@ -377,15 +376,16 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 
 pub struct ParsedDeviceResources
 {
-	renderpasses: NamedContents<RenderPassData>,
-	simple_rps: NamedContents<SimpleRenderPassData>, presented_rps: NamedContents<PresentedRenderPassData>,
-	descriptor_set_layouts: NamedContents<Vec<DescriptorEntry>>,
-	push_constant_layouts: NamedContents<PushConstantLayout>,
-	pipeline_layouts: NamedContents<PipelineLayout>,
-	descriptor_sets: NamedContents<DescriptorSetsInfo>,
-	pipeline_states: NamedContents<PipelineStateInfo>,
-	externs: NamedContents<ExternalResourceData>,
-	framebuffers: NamedContents<FramebufferInfo>
+	pub renderpasses: NamedContents<RenderPassData>,
+	pub simple_rps: NamedContents<SimpleRenderPassData>,
+	pub presented_rps: NamedContents<PresentedRenderPassData>,
+	pub descriptor_set_layouts: NamedContents<Vec<DescriptorEntry>>,
+	pub push_constant_layouts: NamedContents<PushConstantLayout>,
+	pub pipeline_layouts: NamedContents<PipelineLayout>,
+	pub descriptor_sets: NamedContents<DescriptorSetsInfo>,
+	pub pipeline_states: NamedContents<PipelineStateInfo>,
+	pub externs: NamedContents<ExternalResourceData>,
+	pub framebuffers: NamedContents<FramebufferInfo>
 }
 
 fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, ParseLine<'s>)>
@@ -518,12 +518,12 @@ lazy_static!
 }
 fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 {
-	let mut rpd = RenderPassData { attachments: NamedContents::new(), passes: NamedContents::new(), deps: Vec::new() };
+	let mut rpd = RenderPassData { attachments: NamedContents::new(), subpasses: NamedContents::new(), deps: Vec::new() };
 	while let Some((l, mut s)) = acquire_line(source, 1)
 	{
 		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
 		{
-			ATTACHMENTS[..] => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+			ATTACHMENTS[..] => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided) }
 			else
 			{
 				while let Some((l, mut s)) = acquire_line(source, 2)
@@ -536,20 +536,20 @@ fn parse_renderpass(source: &mut LazyLines) -> RenderPassData
 				}
 				Ok(())
 			},
-			SUBPASSES[..] => if !rpd.passes.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+			SUBPASSES[..] => if !rpd.subpasses.is_empty() { Err(ParseError::DefinitionOverrided) }
 			else
 			{
 				while let Some((l, mut s)) = acquire_line(source, 2)
 				{
 					match NamedConfigLine::parse(&mut s, parse_subpass_desc).report_error(l)
 					{
-						NamedConfigLine { name: Some(name), config } => { rpd.passes.insert(name.into(), config); },
-						NamedConfigLine { config, .. } => { rpd.passes.insert_unnamed(config); }
+						NamedConfigLine { name: Some(name), config } => { rpd.subpasses.insert(name.into(), config); },
+						NamedConfigLine { config, .. } => { rpd.subpasses.insert_unnamed(config); }
 					}
 				}
 				Ok(())
 			},
-			DEPENDENCIES[..] => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).report_error(l) }
+			DEPENDENCIES[..] => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided) }
 			else
 			{
 				while let Some((l, mut s)) = acquire_line(source, 2)

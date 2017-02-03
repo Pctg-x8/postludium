@@ -23,10 +23,7 @@ impl<'a> LazyLines<'a>
 			counter += 1;
 		}
 		let l = &self.source[..counter];
-		if counter > 0
-		{
-			self.source = &self.source[min(self.source.len(), counter + 1)..];
-		}
+		self.source = &self.source[min(self.source.len(), counter + 1)..];
 		l
 	}
 
