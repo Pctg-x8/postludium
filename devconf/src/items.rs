@@ -152,7 +152,7 @@ pub fn parse_usize_range(source: &mut ParseLine) -> Result<Range<usize>, ParseEr
 	else { Err(ParseError::Expected("Bytesize Range", source.current())) }
 }
 
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum PixelFormat { Ref(String), Value(VkFormat) }
 impl PixelFormat
 {

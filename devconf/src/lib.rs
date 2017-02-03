@@ -8,7 +8,6 @@ extern crate interlude_vkdefs as vk;
 use std::collections::HashMap;
 use parsetools::*;
 use std::borrow::Cow;
-#[cfg(test)] use itertools::Itertools;
 use vk::*;
 
 #[macro_use] mod items;
@@ -60,18 +59,18 @@ pub struct DeviceResources
 */
 
 // Source Representations
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct RPAttachment { format: PixelFormat, layouts: Transition<VkImageLayout>, clear_on_load: Option<bool>, preserve_content: bool }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct RPSubpassDesc { color_outs: Vec<ConfigInt>, inputs: Vec<ConfigInt> }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct RPSubpassDeps { passtrans: Transition<ConfigInt>, access_mask: Transition<VkAccessFlags>, stage_bits: VkPipelineStageFlags, by_region: bool }
 pub struct RenderPassData { attachments: NamedContents<RPAttachment>, passes: NamedContents<RPSubpassDesc>, deps: Vec<RPSubpassDeps> }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct SimpleRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct PresentedRenderPassData { format: PixelFormat, clear_on_load: Option<bool> }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct PreciseRenderPassRef { rp: ConfigInt, subpass: ConfigInt }
 impl PreciseRenderPassRef
 {
@@ -85,52 +84,53 @@ impl PreciseRenderPassRef
 		else { Err(ParseError::Expected("PreciseRenderPassRef", inloc)) })
 	}
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum ExternalResourceData
 {
 	ImageView { dim: u8, refname: String }, SwapChainViews
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum FramebufferStyle
 {
 	WithRenderPass(ConfigInt), Simple(Option<bool>), Presented(Option<bool>)
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct FramebufferInfo
 {
 	style: FramebufferStyle, views: Vec<ConfigInt>
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum BufferDescriptorOption { None, TexelStore, DynamicOffset }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum DescriptorEntryKind
 {
 	Sampler, CombinedSampler, SampledImage, StorageImage,
 	UniformBuffer(BufferDescriptorOption), StorageBuffer(BufferDescriptorOption), InputAttachment
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility: VkShaderStageFlags }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct PushConstantLayout { range: std::ops::Range<usize>, visibility: VkShaderStageFlags }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct PipelineLayout { descs: Vec<ConfigInt>, pushconstants: Vec<ConfigInt> }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct DescriptorSetsInfo(Vec<DescriptorSetEntry>);
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct DescriptorSetEntry { name: Option<String>, layout: ConfigInt }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct PipelineShaderStageInfo
 {
 	asset: AssetResource, consts: HashMap<u32, NumericLiteral>
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct PipelineStateInfo
 {
+	renderpass: PreciseRenderPassRef, layout_ref: ConfigInt,
 	vertex_shader: PipelineShaderStageInfo, geometry_shader: Option<PipelineShaderStageInfo>, fragment_shader: Option<PipelineShaderStageInfo>,
 	tesscontrol_shader: Option<PipelineShaderStageInfo>, tessevaluation_shader: Option<PipelineShaderStageInfo>,
 	primitive_topology: VkPrimitiveTopology, viewport_scissors: Vec<ViewportScissorEntry>, blendstates: Vec<AttachmentBlendState>
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum ViewportScissorEntry
 {
 	ScreenView,
@@ -166,7 +166,7 @@ impl ViewportScissorEntry
 		}
 	}
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub enum AttachmentBlendState
 {
 	Disabled, Alpha, PremultipliedAlpha
@@ -375,6 +375,19 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 	}
 }
 
+pub struct ParsedDeviceResources
+{
+	renderpasses: NamedContents<RenderPassData>,
+	simple_rps: NamedContents<SimpleRenderPassData>, presented_rps: NamedContents<PresentedRenderPassData>,
+	descriptor_set_layouts: NamedContents<Vec<DescriptorEntry>>,
+	push_constant_layouts: NamedContents<PushConstantLayout>,
+	pipeline_layouts: NamedContents<PipelineLayout>,
+	descriptor_sets: NamedContents<DescriptorSetsInfo>,
+	pipeline_states: NamedContents<PipelineStateInfo>,
+	externs: NamedContents<ExternalResourceData>,
+	framebuffers: NamedContents<FramebufferInfo>
+}
+
 fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, ParseLine<'s>)>
 {
 	const HEAD: [char; 3] = ['-'; 3];
@@ -395,27 +408,77 @@ fn ident_break(c: char) -> bool
 {
 	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
 }
-pub fn parse_device_resources(lines: &mut LazyLines)
+pub fn parse_device_resources(lines: &mut LazyLines) -> ParsedDeviceResources
 {
+	let mut pdr = ParsedDeviceResources
+	{
+		renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
+		descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
+		pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
+		externs: NamedContents::new(), framebuffers: NamedContents::new()
+	};
+
 	while let Some((l, mut source)) = acquire_line(lines, 0)
 	{
 		let NamedConfigLine { name, .. } = NamedConfigLine::parse_noargs(&mut source).report_error(l);
 		let s = source.drop_while(ignore_chars).take_until(ident_break);
 		match s.clone_as_string().as_ref()
 		{
-			"RenderPass" => { parse_renderpass(lines); },
-			"SimpleRenderPass" => { parse_simple_renderpass(l, lines); },
-			"PresentedRenderPass" => { parse_presented_renderpass(l, lines); },
-			"DescriptorSetLayout" => { parse_descriptor_set_layout(lines); },
-			"PushConstantLayout" => { parse_push_constant_layout(lines).report_error(l); },
-			"PipelineLayout" => { parse_pipeline_layout(lines); },
-			"DescriptorSets" => { parse_descriptor_sets(lines); },
-			"PipelineState" => { parse_pipeline_state(l, source.drop_while(ignore_chars), lines); },
-			"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(l); },
-			"Framebuffer" => { parse_framebuffer(source.drop_while(ignore_chars), lines).report_error(l); }
+			"RenderPass" =>
+			{
+				let p = parse_renderpass(lines);
+				if let Some(name) = name { pdr.renderpasses.insert(name.into(), p); } else { pdr.renderpasses.insert_unnamed(p); }
+			},
+			"SimpleRenderPass" =>
+			{
+				let p = parse_simple_renderpass(l, lines);
+				if let Some(name) = name { pdr.simple_rps.insert(name.into(), p); } else { pdr.simple_rps.insert_unnamed(p); }
+			},
+			"PresentedRenderPass" =>
+			{
+				let p = parse_presented_renderpass(l, lines);
+				if let Some(name) = name { pdr.presented_rps.insert(name.into(), p); } else { pdr.presented_rps.insert_unnamed(p); }
+			},
+			"DescriptorSetLayout" =>
+			{
+				let p = parse_descriptor_set_layout(lines);
+				if let Some(name) = name { pdr.descriptor_set_layouts.insert(name.into(), p); } else { pdr.descriptor_set_layouts.insert_unnamed(p); }
+			},
+			"PushConstantLayout" =>
+			{
+				let p = parse_push_constant_layout(lines).report_error(l);
+				if let Some(name) = name { pdr.push_constant_layouts.insert(name.into(), p); } else { pdr.push_constant_layouts.insert_unnamed(p); }
+			},
+			"PipelineLayout" =>
+			{
+				let p = parse_pipeline_layout(lines);
+				if let Some(name) = name { pdr.pipeline_layouts.insert(name.into(), p); } else { pdr.pipeline_layouts.insert_unnamed(p); }
+			},
+			"DescriptorSets" =>
+			{
+				let p = parse_descriptor_sets(lines);
+				if let Some(name) = name { pdr.descriptor_sets.insert(name.into(), p); } else { pdr.descriptor_sets.insert_unnamed(p); }
+			},
+			"PipelineState" =>
+			{
+				let p = parse_pipeline_state(l, source.drop_while(ignore_chars), lines);
+				if let Some(name) = name { pdr.pipeline_states.insert(name.into(), p); } else { pdr.pipeline_states.insert_unnamed(p); }
+			},
+			"Extern" =>
+			{
+				let p = parse_extern_resources(source.drop_while(ignore_chars)).report_error(l);
+				if let Some(name) = name { pdr.externs.insert(name.into(), p); } else { pdr.externs.insert_unnamed(p); }
+			},
+			"Framebuffer" =>
+			{
+				let p = parse_framebuffer(source.drop_while(ignore_chars), lines).report_error(l);
+				if let Some(name) = name { pdr.framebuffers.insert(name.into(), p); } else { pdr.framebuffers.insert_unnamed(p); }
+			},
 			_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(l)
 		};
 	}
+
+	pdr
 }
 fn parse_extern_resources(input: &mut ParseLine) -> Result<ExternalResourceData, ParseError>
 {
@@ -582,7 +645,7 @@ fn parse_framebuffer_rp(input: &mut ParseLine) -> Result<FramebufferRenderPassRe
 	}
 	else { Ok(FramebufferRenderPassRef::None) }
 }
-fn parse_framebuffer(rest: &mut ParseLine, mut source: &mut LazyLines) -> Result<FramebufferInfo, ParseError>
+fn parse_framebuffer(rest: &mut ParseLine, source: &mut LazyLines) -> Result<FramebufferInfo, ParseError>
 {
 	parse_framebuffer_rp(rest.drop_while(ignore_chars)).and_then(|arg| ConfigInt::parse_array(rest.drop_while(ignore_chars)).map(|vs| (arg, vs)))
 		.and_then(|(arg, vs)|
@@ -710,7 +773,7 @@ fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: &mut 
 		PreciseRenderPassRef::parse(source.drop_opt(3).drop_while(ignore_chars))
 	}
 	else { Err(ParseError::Expected("\"for\"", source.current())) };
-	let rpl = r.and_then(|rp| if source.drop_while(ignore_chars).starts_with_trailing_opt(&['w', 'i', 't', 'h'], ident_break)
+	let (rp, l) = r.and_then(|rp| if source.drop_while(ignore_chars).starts_with_trailing_opt(&['w', 'i', 't', 'h'], ident_break)
 	{
 		ConfigInt::parse(source.drop_opt(4).drop_while(ignore_chars)).map(|l| (rp, l))
 	}
@@ -745,6 +808,7 @@ fn parse_pipeline_state(current: usize, source: &mut ParseLine, restlines: &mut 
 	vsinfo.ok_or(ParseError::ConfigRequired("VertexShader")).and_then(|vsinfo|
 	primt.ok_or(ParseError::ConfigRequired("PrimitiveTopology")).map(|primt| PipelineStateInfo
 	{
+		renderpass: rp, layout_ref: l,
 		vertex_shader: vsinfo, fragment_shader: fsinfo, geometry_shader: gsinfo,
 		tesscontrol_shader: tcsinfo, tessevaluation_shader: tesinfo,
 		primitive_topology: primt, viewport_scissors: vpsc, blendstates: blends
@@ -1007,6 +1071,7 @@ fn at_token(input: &mut ParseLine) -> bool
 #[cfg(test)] mod tests
 {
 	use super::*;
+	use itertools::Itertools;
 
 	#[test] fn parse_precise_renderpass_ref()
 	{
