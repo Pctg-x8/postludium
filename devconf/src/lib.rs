@@ -301,6 +301,26 @@ impl<C> NamedConfigLine<C>
 		name_res.and_then(|name_opt| argparser(input.drop_while(ignore_chars)).map(|v| NamedConfigLine { name: name_opt, config: v }))
 	}
 }
+impl NamedConfigLine<()>
+{
+	fn parse_noargs(input: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		if input.front() == Some('$')
+		{
+			let name = input.drop_opt(1).take_until(ident_break);
+			if name.is_empty() { Err(ParseError::NameRequired(name.current())) }
+			else
+			{
+				if input.drop_while(ignore_chars).front() == Some(':')
+				{
+					input.drop_opt(1); Ok(NamedConfigLine { name: Some(name.clone_as_string()), config: () })
+				}
+				else { Err(ParseError::DelimiterRequired(input.current())) }
+			}
+		}
+		else { Ok(NamedConfigLine { name: None, config: () }) }
+	}
+}
 
 // Parse Error
 #[derive(Debug, PartialEq)]
@@ -375,44 +395,27 @@ fn ident_break(c: char) -> bool
 {
 	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
 }
-pub fn parse_device_resource(mut source: LazyLines)
+pub fn parse_device_resources(lines: &mut LazyLines)
 {
-	if let Some((l, s)) = source.pop()
+	while let Some((l, mut source)) = acquire_line(lines, 0)
 	{
-		match s.front()
+		let NamedConfigLine { name, .. } = NamedConfigLine::parse_noargs(&mut source).report_error(l);
+		let s = source.drop_while(ignore_chars).take_until(ident_break);
+		match s.clone_as_string().as_ref()
 		{
-			Some('#') => parse_device_resource(source),
-			Some('$') => parse_named_device_resource(l, &mut ParseLine(s, 0), source),
-			Some(_) => parse_unnamed_device_resource(l, &mut ParseLine(s, 0), source),
-			_ => Err(ParseError::UnexpectedHead).report_error(l)
-		}
+			"RenderPass" => { parse_renderpass(lines); },
+			"SimpleRenderPass" => { parse_simple_renderpass(l, lines); },
+			"PresentedRenderPass" => { parse_presented_renderpass(l, lines); },
+			"DescriptorSetLayout" => { parse_descriptor_set_layout(lines); },
+			"PushConstantLayout" => { parse_push_constant_layout(lines).report_error(l); },
+			"PipelineLayout" => { parse_pipeline_layout(lines); },
+			"DescriptorSets" => { parse_descriptor_sets(lines); },
+			"PipelineState" => { parse_pipeline_state(l, source.drop_while(ignore_chars), lines); },
+			"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(l); },
+			"Framebuffer" => { parse_framebuffer(source.drop_while(ignore_chars), lines).report_error(l); }
+			_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(l)
+		};
 	}
-}
-fn parse_named_device_resource(current: usize, source: &mut ParseLine, mut restlines: LazyLines)
-{
-	NamedConfigLine::parse(source, |source|
-	{
-		parse_unnamed_device_resource(current, source.drop_while(ignore_chars), restlines);
-		Ok(())
-	}).report_error(current);
-}
-fn parse_unnamed_device_resource(current: usize, source: &mut ParseLine, mut rest: LazyLines)
-{
-	let s = source.take_until(ident_break);
-	match s.clone_as_string().as_ref()
-	{
-		"RenderPass" => { parse_renderpass(&mut rest); },
-		"SimpleRenderPass" => { parse_simple_renderpass(current, &mut rest); },
-		"PresentedRenderPass" => { parse_presented_renderpass(current, &mut rest); },
-		"DescriptorSetLayout" => { parse_descriptor_set_layout(&mut rest); },
-		"PushConstantLayout" => { parse_push_constant_layout(&mut rest).report_error(current); },
-		"PipelineLayout" => { parse_pipeline_layout(&mut rest); },
-		"DescriptorSets" => { parse_descriptor_sets(&mut rest); },
-		"PipelineState" => { parse_pipeline_state(current, source.drop_while(ignore_chars), &mut rest); },
-		"Extern" => { parse_extern_resources(source.drop_while(ignore_chars)).report_error(current); },
-		"Framebuffer" => { parse_framebuffer(source.drop_while(ignore_chars), &mut rest).report_error(current); }
-		_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(current)
-	};
 }
 fn parse_extern_resources(input: &mut ParseLine) -> Result<ExternalResourceData, ParseError>
 {
