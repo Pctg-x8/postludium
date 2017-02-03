@@ -1,10 +1,9 @@
 // High-ordered objects
 
-#[cfg(test)] use itertools::Itertools;
 use parsetools::*;
 use super::{ident_break, ignore_chars, ParseError, from_token};
 
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Debug, PartialEq)]
 pub struct Transition<T> { pub from: T, pub to: T }
 impl<T> Transition<T>
 {
@@ -42,18 +41,24 @@ impl<T> Transition<T> where T: Copy
 		})
 	}
 }
-#[test] fn parse_transition()
+
+#[cfg(test)] mod tests
 {
-	use super::items::*;
+	use itertools::Itertools;
+	use super::*;
+	use items::*;
 	use vk::*;
 
-	Testing!
+	#[test] fn parse_transition()
 	{
-		PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex -> Fragment"
-			=> Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_FRAGMENT_BIT }),
-		PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex"
-			=> Err(ParseError::DirectionRequired(6)),
-		PartialApply1!(Transition::parse_opt; parse_shader_stage_bits); "Vertex"
-			=> Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_VERTEX_BIT })
+		Testing!
+		{
+			PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex -> Fragment"
+				=> Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_FRAGMENT_BIT }),
+			PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex"
+				=> Err(ParseError::DirectionRequired(6)),
+			PartialApply1!(Transition::parse_opt; parse_shader_stage_bits); "Vertex"
+				=> Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_VERTEX_BIT })
+		}
 	}
 }

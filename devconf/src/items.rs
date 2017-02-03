@@ -5,24 +5,6 @@ use vk::*;
 use super::{ignore_chars, ident_break};
 use std::ops::Range;
 
-#[cfg(test)] use itertools::Itertools;
-#[cfg(test)]
-macro_rules! Testing
-{
-	{$f: expr; $t: expr => $e: expr , $($r: tt)+} =>
-	{
-		Testing! { $f; $t => $e }
-		Testing! { $($r)* }
-	};
-	{$f: expr; $t: expr => $e: expr ,} =>
-	{
-		Testing! { $f; $t => $e }
-	};
-	{$f: expr; $t: expr => $e: expr} =>
-	{
-		assert_eq!($f(&mut ParseLine(&$t.chars().collect_vec(), 0)), $e);
-	}
-}
 macro_rules! PartialApply1
 {
 	($f: expr; $p: expr) => (|x| $f(x, $p))
@@ -85,21 +67,6 @@ impl ConfigInt
 		else { Self::parse(input).map(|v| vec![v]) }
 	}
 }
-#[test] fn parse_config_int()
-{
-	Testing!
-	{
-		ConfigInt::parse; "10" => Ok(ConfigInt::Value(10)),
-		ConfigInt::parse; "$TA," => Ok(ConfigInt::Ref("TA".into())),
-		ConfigInt::parse; "$ " => Err(ParseError::NameRequired(1)),
-		ConfigInt::parse; "T" => Err(ParseError::IntValueRequired(0)),
-		ConfigInt::parse_array; "10" => Ok(vec![ConfigInt::Value(10)]),
-		ConfigInt::parse_array; "[1, 2]~" => Ok(vec![ConfigInt::Value(1), ConfigInt::Value(2)]),
-		ConfigInt::parse_array; "[1,,]" => Ok(vec![ConfigInt::Value(1)]),
-		ConfigInt::parse_array; "[1 2]" => Err(ParseError::DelimiterRequired(3)),
-		ConfigInt::parse_array; "[1," => Err(ParseError::IntValueRequired(3))
-	}
-}
 #[derive(Debug, PartialEq)]
 pub enum NumericLiteral { Integer(i64), Floating(f64), Floating32(f32) }
 impl NumericLiteral
@@ -142,20 +109,6 @@ impl NumericLiteral
 		})
 	}
 }
-#[test] fn parse_numeric()
-{
-	Testing!
-	{
-		PartialApply1!(NumericLiteral::parse; false); "10" => Ok(NumericLiteral::Integer(10)),
-		PartialApply1!(NumericLiteral::parse; false); "10.0" => Ok(NumericLiteral::Floating(10.0)),
-		PartialApply1!(NumericLiteral::parse; true); "10.0" => Ok(NumericLiteral::Floating32(10.0)),
-		PartialApply1!(NumericLiteral::parse; false); "10f" => Ok(NumericLiteral::Floating(10.0)),
-		PartialApply1!(NumericLiteral::parse; true); "10f" => Ok(NumericLiteral::Floating32(10.0)),
-		PartialApply1!(NumericLiteral::parse; false); "10f32" => Ok(NumericLiteral::Floating32(10.0)),
-		PartialApply1!(NumericLiteral::parse; true); "10f64" => Ok(NumericLiteral::Floating(10.0)),
-		PartialApply1!(NumericLiteral::parse; false); "" => Err(ParseError::Expected("Numerical Value", 0))
-	}
-}
 #[derive(Debug, PartialEq)]
 pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
 impl AssetResource
@@ -179,16 +132,6 @@ impl AssetResource
 		else { ConfigInt::parse(input).map(AssetResource::IntRef) }
 	}
 }
-#[test] fn parse_asset_resource()
-{
-	Testing!
-	{
-		AssetResource::parse; "!shaders.PureF" => Ok(AssetResource::PathRef(vec!["shaders".into(), "PureF".into()])),
-		AssetResource::parse; "$en" => Ok(AssetResource::IntRef(ConfigInt::Ref("en".into()))),
-		AssetResource::parse; "!" => Err(ParseError::Expected("Asset Path", 1)),
-		AssetResource::parse; "~" => Err(ParseError::IntValueRequired(0))
-	}
-}
 
 // Bytesize Range
 pub fn parse_usize_range(source: &mut ParseLine) -> Result<Range<usize>, ParseError>
@@ -207,16 +150,6 @@ pub fn parse_usize_range(source: &mut ParseLine) -> Result<Range<usize>, ParseEr
 		}
 	}
 	else { Err(ParseError::Expected("Bytesize Range", source.current())) }
-}
-#[test] fn usize_range()
-{
-	Testing!
-	{
-		parse_usize_range; "0 .. 16" => Ok(0usize .. 16usize),
-		parse_usize_range; "n .. m" => Err(ParseError::BytesizeRequired(0)),
-		parse_usize_range; "4" => Err(ParseError::Expected("Bytesize Range", 1)),
-		parse_usize_range; "4 ..n" => Err(ParseError::BytesizeRequired(4))
-	}
 }
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -254,16 +187,6 @@ impl PixelFormat
 		}
 	}
 }
-#[test] fn parse_pixel_format()
-{
-	Testing!
-	{
-		PixelFormat::parse; "R8G8B8A8 UNORM" => Ok(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM)),
-		PixelFormat::parse; "R8G8b8A8 Unorm" => Ok(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM)),
-		PixelFormat::parse; "$ScreenFormat" => Ok(PixelFormat::Ref("ScreenFormat".into())),
-		PixelFormat::parse; "R8G8B8A8 SF" => Err(ParseError::UnknownFormat(0))
-	}
-}
 
 lazy_static!
 {
@@ -276,14 +199,6 @@ pub fn parse_image_layout(source: &mut ParseLine) -> Result<VkImageLayout, Parse
 	if name == CAO[..] { Ok(VkImageLayout::ColorAttachmentOptimal) }
 	else if name == SROO[..] { Ok(VkImageLayout::ShaderReadOnlyOptimal) }
 	else { Err(ParseError::UnknownImageLayout(name.current())) }
-}
-#[test] fn image_layouts()
-{
-	Testing!
-	{
-		parse_image_layout; "ColorAttachmentOptimal:" => Ok(VkImageLayout::ColorAttachmentOptimal),
-		parse_image_layout; "Shaders" => Err(ParseError::UnknownImageLayout(0))
-	}
 }
 
 lazy_static!
@@ -389,16 +304,6 @@ pub fn parse_shader_stage_bits(source: &mut ParseLine) -> Result<VkShaderStageFl
 	}
 	recursive(source, 0)
 }
-#[test] fn shader_stage_bits()
-{
-	Testing!
-	{
-		parse_shader_stage_bits; "Vertex / TessEvaluation" => Ok(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT),
-		parse_shader_stage_bits; "Geometry" => Ok(VK_SHADER_STAGE_GEOMETRY_BIT),
-		parse_shader_stage_bits; "GEOMETRY" => Err(ParseError::UnknownShaderStageFlag(0)),
-		parse_shader_stage_bits; "Vertex/" => Err(ParseError::UnknownShaderStageFlag(7))
-	}
-}
 pub fn parse_string_literal(source: &mut ParseLine) -> Result<String, ParseError>
 {
 	fn recursive_char<'s>(input: &mut ParseLine<'s>, sink: &mut String) -> Result<(), ParseError>
@@ -431,30 +336,129 @@ pub fn parse_string_literal(source: &mut ParseLine) -> Result<String, ParseError
 	else { Err(ParseError::Expected("String Literal", source.current())) }
 }
 
-#[test] fn pipeline_stage_bits()
+#[cfg(test)] #[macro_use] mod tests
 {
-	Testing!
+	use super::*;
+	use itertools::Itertools;
+
+	macro_rules! Testing
 	{
-		parse_pipeline_stage_bits; "FragmentShaderStage" => Ok(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
-		parse_pipeline_stage_bits; "TopOfPipe / BottomOfPipe" => Ok(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT),
-		parse_pipeline_stage_bits; "a" => Err(ParseError::UnknownPipelineStageFlag(0))
+		{$f: expr; $t: expr => $e: expr , $($r: tt)+} =>
+		{
+			Testing! { $f; $t => $e }
+			Testing! { $($r)* }
+		};
+		{$f: expr; $t: expr => $e: expr ,} =>
+		{
+			Testing! { $f; $t => $e }
+		};
+		{$f: expr; $t: expr => $e: expr} =>
+		{
+			assert_eq!($f(&mut ParseLine(&$t.chars().collect_vec(), 0)), $e);
+		}
 	}
-}
-#[test] fn access_mask()
-{
-	Testing!
+	#[test] fn parse_config_int()
 	{
-		parse_access_mask; "ColorAttachmentWrite" => Ok(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
-		parse_access_mask; "ColorAttachmentWrite / ShaderRead" => Ok(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT),
-		parse_access_mask; "a" => Err(ParseError::UnknownAccessFlag(0))
+		Testing!
+		{
+			ConfigInt::parse; "10" => Ok(ConfigInt::Value(10)),
+			ConfigInt::parse; "$TA," => Ok(ConfigInt::Ref("TA".into())),
+			ConfigInt::parse; "$ " => Err(ParseError::NameRequired(1)),
+			ConfigInt::parse; "T" => Err(ParseError::IntValueRequired(0)),
+			ConfigInt::parse_array; "10" => Ok(vec![ConfigInt::Value(10)]),
+			ConfigInt::parse_array; "[1, 2]~" => Ok(vec![ConfigInt::Value(1), ConfigInt::Value(2)]),
+			ConfigInt::parse_array; "[1,,]" => Ok(vec![ConfigInt::Value(1)]),
+			ConfigInt::parse_array; "[1 2]" => Err(ParseError::DelimiterRequired(3)),
+			ConfigInt::parse_array; "[1," => Err(ParseError::IntValueRequired(3))
+		}
 	}
-}
-#[test] fn string_literal()
-{
-	Testing!
+	#[test] fn parse_numeric()
 	{
-		parse_string_literal; "\"HogeResource\"" => Ok("HogeResource".into()),
-		parse_string_literal; "\"HogeResource" => Err(ParseError::ClosingRequired(13)),
-		parse_string_literal; "A" => Err(ParseError::Expected("String Literal", 0))
+		Testing!
+		{
+			PartialApply1!(NumericLiteral::parse; false); "10" => Ok(NumericLiteral::Integer(10)),
+			PartialApply1!(NumericLiteral::parse; false); "10.0" => Ok(NumericLiteral::Floating(10.0)),
+			PartialApply1!(NumericLiteral::parse; true); "10.0" => Ok(NumericLiteral::Floating32(10.0)),
+			PartialApply1!(NumericLiteral::parse; false); "10f" => Ok(NumericLiteral::Floating(10.0)),
+			PartialApply1!(NumericLiteral::parse; true); "10f" => Ok(NumericLiteral::Floating32(10.0)),
+			PartialApply1!(NumericLiteral::parse; false); "10f32" => Ok(NumericLiteral::Floating32(10.0)),
+			PartialApply1!(NumericLiteral::parse; true); "10f64" => Ok(NumericLiteral::Floating(10.0)),
+			PartialApply1!(NumericLiteral::parse; false); "" => Err(ParseError::Expected("Numerical Value", 0))
+		}
+	}
+	#[test] fn parse_asset_resource()
+	{
+		Testing!
+		{
+			AssetResource::parse; "!shaders.PureF" => Ok(AssetResource::PathRef(vec!["shaders".into(), "PureF".into()])),
+			AssetResource::parse; "$en" => Ok(AssetResource::IntRef(ConfigInt::Ref("en".into()))),
+			AssetResource::parse; "!" => Err(ParseError::Expected("Asset Path", 1)),
+			AssetResource::parse; "~" => Err(ParseError::IntValueRequired(0))
+		}
+	}
+	#[test] fn usize_range()
+	{
+		Testing!
+		{
+			parse_usize_range; "0 .. 16" => Ok(0usize .. 16usize),
+			parse_usize_range; "n .. m" => Err(ParseError::BytesizeRequired(0)),
+			parse_usize_range; "4" => Err(ParseError::Expected("Bytesize Range", 1)),
+			parse_usize_range; "4 ..n" => Err(ParseError::BytesizeRequired(4))
+		}
+	}
+	#[test] fn parse_pixel_format()
+	{
+		Testing!
+		{
+			PixelFormat::parse; "R8G8B8A8 UNORM" => Ok(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM)),
+			PixelFormat::parse; "R8G8b8A8 Unorm" => Ok(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM)),
+			PixelFormat::parse; "$ScreenFormat" => Ok(PixelFormat::Ref("ScreenFormat".into())),
+			PixelFormat::parse; "R8G8B8A8 SF" => Err(ParseError::UnknownFormat(0))
+		}
+	}
+	#[test] fn image_layouts()
+	{
+		Testing!
+		{
+			parse_image_layout; "ColorAttachmentOptimal:" => Ok(VkImageLayout::ColorAttachmentOptimal),
+			parse_image_layout; "Shaders" => Err(ParseError::UnknownImageLayout(0))
+		}
+	}
+	#[test] fn shader_stage_bits()
+	{
+		Testing!
+		{
+			parse_shader_stage_bits; "Vertex / TessEvaluation" => Ok(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT),
+			parse_shader_stage_bits; "Geometry" => Ok(VK_SHADER_STAGE_GEOMETRY_BIT),
+			parse_shader_stage_bits; "GEOMETRY" => Err(ParseError::UnknownShaderStageFlag(0)),
+			parse_shader_stage_bits; "Vertex/" => Err(ParseError::UnknownShaderStageFlag(7))
+		}
+	}
+	#[test] fn pipeline_stage_bits()
+	{
+		Testing!
+		{
+			parse_pipeline_stage_bits; "FragmentShaderStage" => Ok(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+			parse_pipeline_stage_bits; "TopOfPipe / BottomOfPipe" => Ok(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT),
+			parse_pipeline_stage_bits; "a" => Err(ParseError::UnknownPipelineStageFlag(0))
+		}
+	}
+	#[test] fn access_mask()
+	{
+		Testing!
+		{
+			parse_access_mask; "ColorAttachmentWrite" => Ok(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+			parse_access_mask; "ColorAttachmentWrite / ShaderRead" => Ok(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT),
+			parse_access_mask; "a" => Err(ParseError::UnknownAccessFlag(0))
+		}
+	}
+	#[test] fn string_literal()
+	{
+		Testing!
+		{
+			parse_string_literal; "\"HogeResource\"" => Ok("HogeResource".into()),
+			parse_string_literal; "\"HogeResource" => Err(ParseError::ClosingRequired(13)),
+			parse_string_literal; "A" => Err(ParseError::Expected("String Literal", 0))
+		}
 	}
 }
