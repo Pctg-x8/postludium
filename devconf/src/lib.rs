@@ -89,9 +89,9 @@ impl PreciseRenderPassRef
 {
 	Testing!
 	{
-		PreciseRenderPassRef::parse: "0.1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Value(0), subpass: ConfigInt::Value(1) }),
-		PreciseRenderPassRef::parse: "$First .1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Ref("First".into()), subpass: ConfigInt::Value(1) }),
-		PreciseRenderPassRef::parse: "$Final" => Err(ParseError::Expected("PreciseRenderPassRef", 0))
+		PreciseRenderPassRef::parse; "0.1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Value(0), subpass: ConfigInt::Value(1) }),
+		PreciseRenderPassRef::parse; "$First .1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Ref("First".into()), subpass: ConfigInt::Value(1) }),
+		PreciseRenderPassRef::parse; "$Final" => Err(ParseError::Expected("PreciseRenderPassRef", 0))
 	}
 }
 #[cfg_attr(test, derive(Debug, PartialEq))]
@@ -232,12 +232,12 @@ impl AttachmentBlendState
 {
 	Testing!
 	{
-		AttachmentBlendState::parse: "Disabled" => Ok(AttachmentBlendState::Disabled),
-		AttachmentBlendState::parse: "None" => Err(ParseError::Expected("AttachmentBlendState Constant", 0)),
-		AttachmentBlendState::parse_array: "[]" => Ok(Vec::new()),
-		AttachmentBlendState::parse_array: "[Alpha]" => Ok(vec![AttachmentBlendState::Alpha]),
-		AttachmentBlendState::parse_array: "[" => Err(ParseError::Expected("AttachmentBlendState Constant", 1)),
-		AttachmentBlendState::parse_array: "" => Err(ParseError::Expected("Array of AttachmentBlendState Constant", 0))
+		AttachmentBlendState::parse; "Disabled" => Ok(AttachmentBlendState::Disabled),
+		AttachmentBlendState::parse; "None" => Err(ParseError::Expected("AttachmentBlendState Constant", 0)),
+		AttachmentBlendState::parse_array; "[]" => Ok(Vec::new()),
+		AttachmentBlendState::parse_array; "[Alpha]" => Ok(vec![AttachmentBlendState::Alpha]),
+		AttachmentBlendState::parse_array; "[" => Err(ParseError::Expected("AttachmentBlendState Constant", 1)),
+		AttachmentBlendState::parse_array; "" => Err(ParseError::Expected("Array of AttachmentBlendState Constant", 0))
 	}
 }
 
@@ -304,15 +304,15 @@ fn parse_offset2(source: &mut ParseLine) -> Result<(i32, i32), ParseError>
 {
 	Testing!
 	{
-		parse_size3f: "(0.0, 0.0, 1.0)" => Ok((0.0f32, 0.0, 1.0)),
-		parse_size3f: "0.0" => Err(ParseError::Expected("Size3F", 0)),
-		parse_size3f: "(0.0 " => Err(ParseError::Expected("\",\"", 5)),
-		parse_size3f: "(0, 0.0, 0.0" => Err(ParseError::ClosingRequired(12)),
-		parse_offset2: "(0, 0)" => Ok((0, 0)),
-		parse_offset2: "0" => Err(ParseError::Expected("Offset2", 0)),
-		parse_offset2: "(0 " => Err(ParseError::Expected("\",\"", 3)),
-		parse_offset2: "(0, 0, 0" => Err(ParseError::ClosingRequired(5)),
-		parse_offset2: "(0, 0 " => Err(ParseError::ClosingRequired(6))
+		parse_size3f; "(0.0, 0.0, 1.0)" => Ok((0.0f32, 0.0, 1.0)),
+		parse_size3f; "0.0" => Err(ParseError::Expected("Size3F", 0)),
+		parse_size3f; "(0.0 " => Err(ParseError::Expected("\",\"", 5)),
+		parse_size3f; "(0, 0.0, 0.0" => Err(ParseError::ClosingRequired(12)),
+		parse_offset2; "(0, 0)" => Ok((0, 0)),
+		parse_offset2; "0" => Err(ParseError::Expected("Offset2", 0)),
+		parse_offset2; "(0 " => Err(ParseError::Expected("\",\"", 3)),
+		parse_offset2; "(0, 0, 0" => Err(ParseError::ClosingRequired(5)),
+		parse_offset2; "(0, 0 " => Err(ParseError::ClosingRequired(6))
 	}
 }
 
@@ -609,7 +609,7 @@ fn parse_framebuffer_rp(input: &mut ParseLine) -> Result<FramebufferRenderPassRe
 {
 	if input.front() == Some('<')
 	{
-		// Which Parameter: "Presented" / int
+		// Which Parameter; "Presented" / int
 		input.drop_opt(1).drop_while(ignore_chars);
 		let p = if input.front().map(|c| ('0' <= c && c <= '9') || c == '$').unwrap_or(false)
 		{
@@ -701,15 +701,15 @@ fn parse_descriptor_entry(source: &mut ParseLine) -> Result<DescriptorEntry, Par
 {
 	Testing!
 	{
-		parse_descriptor_entry: "UniformBuffer: Vertex" => Ok(DescriptorEntry
+		parse_descriptor_entry; "UniformBuffer: Vertex" => Ok(DescriptorEntry
 		{
 			kind: DescriptorEntryKind::UniformBuffer(BufferDescriptorOption::None), count: 1, visibility: VK_SHADER_STAGE_VERTEX_BIT
 		}),
-		parse_descriptor_entry: "2 CombinedSampler : Geometry / Fragment" => Ok(DescriptorEntry
+		parse_descriptor_entry; "2 CombinedSampler : Geometry / Fragment" => Ok(DescriptorEntry
 		{
 			kind: DescriptorEntryKind::CombinedSampler, count: 2, visibility: VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
 		}),
-		parse_descriptor_entry: "a: Vertex" => Err(ParseError::UnknownDescriptorKind(0))
+		parse_descriptor_entry; "a: Vertex" => Err(ParseError::UnknownDescriptorKind(0))
 	}
 }
 lazy_static!
@@ -883,11 +883,11 @@ fn parse_primitive_topology(source: &mut ParseLine) -> Result<VkPrimitiveTopolog
 {
 	Testing!
 	{
-		parse_primitive_topology: "PointList" => Ok(VkPrimitiveTopology::PointList),
-		parse_primitive_topology: "LineStrip with Adjacency" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
-		parse_primitive_topology: "PatchList with Adjacency" => Err(ParseError::UnknownPrimitiveTopology(true, 0)),
-		parse_primitive_topology: "PointStrip" => Err(ParseError::UnknownPrimitiveTopology(false, 0)),
-		parse_primitive_topology: "" => Err(ParseError::Expected("Primitive Topology", 0))
+		parse_primitive_topology; "PointList" => Ok(VkPrimitiveTopology::PointList),
+		parse_primitive_topology; "LineStrip with Adjacency" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
+		parse_primitive_topology; "PatchList with Adjacency" => Err(ParseError::UnknownPrimitiveTopology(true, 0)),
+		parse_primitive_topology; "PointStrip" => Err(ParseError::UnknownPrimitiveTopology(false, 0)),
+		parse_primitive_topology; "" => Err(ParseError::Expected("Primitive Topology", 0))
 	}
 }
 fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> Result<Vec<ViewportScissorEntry>, ParseError>
@@ -1069,26 +1069,26 @@ fn parse_subpass_deps(input: &mut ParseLine) -> Result<RPSubpassDeps, ParseError
 {
 	Testing!
 	{
-		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage, ByRegion" => Ok(RPSubpassDeps
+		parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage, ByRegion" => Ok(RPSubpassDeps
 		{
 			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
 			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
 			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: true
 		}),
-		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage" => Ok(RPSubpassDeps
+		parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage" => Ok(RPSubpassDeps
 		{
 			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
 			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
 			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: false
 		}),
-		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage," => Ok(RPSubpassDeps
+		parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage," => Ok(RPSubpassDeps
 		{
 			passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
 			access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
 			stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: false
 		}),
-		parse_subpass_deps: "0 -> 1: ColorAttachmentWrite -> ShaderRead" => Err(ParseError::DelimiterRequired(42)),
-		parse_subpass_deps: "0 -> 1" => Err(ParseError::DelimiterRequired(6))
+		parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead" => Err(ParseError::DelimiterRequired(42)),
+		parse_subpass_deps; "0 -> 1" => Err(ParseError::DelimiterRequired(6))
 	}
 }
 
@@ -1102,11 +1102,11 @@ fn from_token(input: &mut ParseLine) -> bool
 {
 	Testing!
 	{
-		from_token: "From" => true,
-		from_token: "<--" => true,
-		from_token: "From[" => true,
-		from_token: "Fro" => false,
-		from_token: "Fromt" => false
+		from_token; "From" => true,
+		from_token; "<--" => true,
+		from_token; "From[" => true,
+		from_token; "Fro" => false,
+		from_token; "Fromt" => false
 	}
 }
 fn at_token(input: &mut ParseLine) -> bool
@@ -1119,10 +1119,10 @@ fn at_token(input: &mut ParseLine) -> bool
 {
 	Testing!
 	{
-		at_token: "At" => true,
-		at_token: "Att" => false,
-		at_token: "@" => true,
-		at_token: "@p" => true
+		at_token; "At" => true,
+		at_token; "Att" => false,
+		at_token; "@" => true,
+		at_token; "@p" => true
 	}
 }
 
@@ -1130,64 +1130,64 @@ fn at_token(input: &mut ParseLine) -> bool
 {
 	Testing!
 	{
-		parse_rp_attachment: "R8G8B8A8 UNORM, ShaderReadOnlyOptimal <- ColorAttachmentOptimal, PreserveContent" => Ok(RPAttachment
+		parse_rp_attachment; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal <- ColorAttachmentOptimal, PreserveContent" => Ok(RPAttachment
 		{
 			format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), preserve_content: true, clear_on_load: None,
 			layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 		}),
-		parse_rp_attachment: "R32 SFLOAT, ShaderReadOnlyOptimal <- ColorAttachmentOptimal" => Ok(RPAttachment
+		parse_rp_attachment; "R32 SFLOAT, ShaderReadOnlyOptimal <- ColorAttachmentOptimal" => Ok(RPAttachment
 		{
 			format: PixelFormat::Value(VkFormat::R32_SFLOAT), preserve_content: false, clear_on_load: None,
 			layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 		}),
-		parse_rp_attachment: "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, ClearOnLoad" => Ok(RPAttachment
+		parse_rp_attachment; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, ClearOnLoad" => Ok(RPAttachment
 		{
 			format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), preserve_content: false, clear_on_load: Some(true),
 			layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 		}),
-		parse_rp_attachment: "R8G8B8A8 SNORM, ShaderReadOnlyOptimal, LoadContent / PreserveContent" => Ok(RPAttachment
+		parse_rp_attachment; "R8G8B8A8 SNORM, ShaderReadOnlyOptimal, LoadContent / PreserveContent" => Ok(RPAttachment
 		{
 			format: PixelFormat::Value(VkFormat::R8G8B8A8_SNORM), preserve_content: true, clear_on_load: Some(false),
 			layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }	
 		}),
-		parse_rp_attachment: "R8G8B8A8 UNORM" => Err(ParseError::DelimiterRequired(14)),
-		parse_rp_attachment: "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, Hoge" => Err(ParseError::UnknownRenderPassAttachmentOptions(39))
+		parse_rp_attachment; "R8G8B8A8 UNORM" => Err(ParseError::DelimiterRequired(14)),
+		parse_rp_attachment; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, Hoge" => Err(ParseError::UnknownRenderPassAttachmentOptions(39))
 	}
 }
 #[test] fn test_subpass_desc()
 {
 	Testing!
 	{
-		parse_subpass_desc: "RenderTo 0" => Ok(RPSubpassDesc { color_outs: vec![ConfigInt::Value(0)], inputs: Vec::new() }),
-		parse_subpass_desc: "RenderTo 0 From 1" => Ok(RPSubpassDesc { color_outs: vec![ConfigInt::Value(0)], inputs: vec![ConfigInt::Value(1)] }),
-		parse_subpass_desc: "<- [1, 2] RenderTo [0, 3]" => Ok(RPSubpassDesc
+		parse_subpass_desc; "RenderTo 0" => Ok(RPSubpassDesc { color_outs: vec![ConfigInt::Value(0)], inputs: Vec::new() }),
+		parse_subpass_desc; "RenderTo 0 From 1" => Ok(RPSubpassDesc { color_outs: vec![ConfigInt::Value(0)], inputs: vec![ConfigInt::Value(1)] }),
+		parse_subpass_desc; "<- [1, 2] RenderTo [0, 3]" => Ok(RPSubpassDesc
 		{
 			color_outs: vec![ConfigInt::Value(0), ConfigInt::Value(3)], inputs: vec![ConfigInt::Value(1), ConfigInt::Value(2)]
 		}),
-		parse_subpass_desc: "Preserve 0" => Err(ParseError::CorruptedSubpassDesc(0)),
-		parse_subpass_desc: "RenderTo 0 RenderTo 1" => Err(ParseError::DefinitionOverrided)
+		parse_subpass_desc; "Preserve 0" => Err(ParseError::CorruptedSubpassDesc(0)),
+		parse_subpass_desc; "RenderTo 0 RenderTo 1" => Err(ParseError::DefinitionOverrided)
 	}
 }
 #[test] fn test_external_resources()
 {
 	Testing!
 	{
-		parse_extern_resources: "ImageView 1D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 1, refname: "HogeResource".into() }),
-		parse_extern_resources: "ImageView 2D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 2, refname: "HogeResource".into() }),
-		parse_extern_resources: "ImageView 3D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 3, refname: "HogeResource".into() }),
-		parse_extern_resources: "SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
-		parse_extern_resources: "Framebuffer" => Err(ParseError::UnknownExternalResource(0)),
-		parse_extern_resources: "ImageView \"HogeResource\"" => Err(ParseError::Expected("Image Dimension", 10))
+		parse_extern_resources; "ImageView 1D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 1, refname: "HogeResource".into() }),
+		parse_extern_resources; "ImageView 2D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 2, refname: "HogeResource".into() }),
+		parse_extern_resources; "ImageView 3D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 3, refname: "HogeResource".into() }),
+		parse_extern_resources; "SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
+		parse_extern_resources; "Framebuffer" => Err(ParseError::UnknownExternalResource(0)),
+		parse_extern_resources; "ImageView \"HogeResource\"" => Err(ParseError::Expected("Image Dimension", 10))
 	}
 }
 #[test] fn test_framebuffer_rp()
 {
 	Testing!
 	{
-		parse_framebuffer_rp: "<$FirstRP>" => Ok(FramebufferRenderPassRef::Int(ConfigInt::Ref("FirstRP".into()))),
-		parse_framebuffer_rp: "<Presented>" => Ok(FramebufferRenderPassRef::Presented),
-		parse_framebuffer_rp: "n" => Ok(FramebufferRenderPassRef::None),
-		parse_framebuffer_rp: "<0" => Err(ParseError::ClosingRequired(2)),
-		parse_framebuffer_rp: "<AA>" => Err(ParseError::UnknownObjectRef("RenderPass", 1))
+		parse_framebuffer_rp; "<$FirstRP>" => Ok(FramebufferRenderPassRef::Int(ConfigInt::Ref("FirstRP".into()))),
+		parse_framebuffer_rp; "<Presented>" => Ok(FramebufferRenderPassRef::Presented),
+		parse_framebuffer_rp; "n" => Ok(FramebufferRenderPassRef::None),
+		parse_framebuffer_rp; "<0" => Err(ParseError::ClosingRequired(2)),
+		parse_framebuffer_rp; "<AA>" => Err(ParseError::UnknownObjectRef("RenderPass", 1))
 	}
 }
