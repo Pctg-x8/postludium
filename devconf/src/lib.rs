@@ -14,6 +14,7 @@ use vk::*;
 pub use items::*;
 mod hobjects;
 pub use hobjects::*;
+mod resolver;
 
 pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
 impl<T> std::ops::Index<usize> for NamedContents<T>
@@ -45,6 +46,10 @@ impl<T> NamedContents<T>
 		self.1.push(value);
 		let p = self.1.len() - 1;
 		&mut self.1[p]
+	}
+	pub fn reverse_index(&self, k: &str) -> Option<usize>
+	{
+		self.0.get(k).cloned()
 	}
 }
 /*
