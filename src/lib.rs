@@ -23,7 +23,8 @@ pub enum DevConfParsingResult<T>
 {
 	Ok(T), NumericParseError(std::num::ParseIntError),
 	InvalidFormatError, InvalidUsageFlagError(String), InvalidFilterError(String),
-	UnsupportedDimension, UnsupportedParameter(Cow<'static, str>), InvalidSwizzle, UnknownConfiguration
+	UnsupportedDimension, UnsupportedParameter(Cow<'static, str>), InvalidSwizzle, UnknownConfiguration,
+	SyntaxError
 }
 impl<T> DevConfParsingResult<T>
 {
@@ -40,7 +41,8 @@ impl<T> DevConfParsingResult<T>
 			DevConfParsingResult::InvalidFilterError(s) => panic!("Invalid Filter Type: {}", s),
 			DevConfParsingResult::UnsupportedDimension => panic!("Unsupported Image Dimension"),
 			DevConfParsingResult::UnsupportedParameter(dep) => panic!("Unsupported Parameter for {}", dep),
-			DevConfParsingResult::UnknownConfiguration => panic!("Unknown Configuration")
+			DevConfParsingResult::UnknownConfiguration => panic!("Unknown Configuration"),
+			DevConfParsingResult::SyntaxError => panic!("Syntax Error")
 		}
 	}
 	pub fn unwrap_on_line(self, line: usize) -> T
@@ -55,7 +57,8 @@ impl<T> DevConfParsingResult<T>
 			DevConfParsingResult::InvalidFilterError(s) => panic!("Invalid Filter Type: {} at line {}", s, line),
 			DevConfParsingResult::UnsupportedDimension => panic!("Unsupported Image Dimension at line {}", line),
 			DevConfParsingResult::UnsupportedParameter(dep) => panic!("Unsupported Parameter for {} at line {}", dep, line),
-			DevConfParsingResult::UnknownConfiguration => panic!("Unknown Configuration at line {}", line)
+			DevConfParsingResult::UnknownConfiguration => panic!("Unknown Configuration at line {}", line),
+			DevConfParsingResult::SyntaxError => panic!("Syntax Error at line {}", line)
 		}
 	}
 	#[cfg(test)]
@@ -101,60 +104,13 @@ pub enum ImageDimensions { Single, Double, Triple }
 fn is_ignored(c: char) -> bool { c == ' ' || c == '\t' }
 fn not_ignored(c: char) -> bool { !is_ignored(c) }
 
-lazy_static!
+pub fn parse_image_format(args: &mut ParseLine, screen_format: VkFormat) -> DevConfParsingResult<VkFormat>
 {
-	static ref VAR_SCREEN_FORMAT: Vec<char>			= "$ScreenFormat".chars().collect();
-	static ref CSTR_BLOCKCOMPRESSION_4: Vec<char>	= "BlockCompression4".chars().collect();
-	static ref CSTR_BLOCKCOMPRESSION_5: Vec<char>	= "BlockCompression5".chars().collect();
-	static ref CSTR_R8: Vec<char>					= "R8".chars().collect();
-	static ref CSTR_R8G8: Vec<char>					= "R8G8".chars().collect();
-	static ref CSTR_R8G8B8A8: Vec<char>				= "R8G8B8A8".chars().collect();
-	static ref CSTR_R16G16B16A16: Vec<char>			= "R16G16B16A16".chars().collect();
-	static ref CSTR_UNORM: Vec<char>				= "UNORM".chars().collect();
-	static ref CSTR_SNORM: Vec<char>				= "SNORM".chars().collect();
-	static ref CSTR_SRGB: Vec<char>					= "SRGB".chars().collect();
-	static ref CSTR_SFLOAT: Vec<char>				= "SFLOAT".chars().collect();
-}
-pub fn parse_image_format(args: &[char], screen_format: VkFormat) -> DevConfParsingResult<VkFormat>
-{
-	let (bit_arrange, rest) = args.take_while(not_ignored);
-	if bit_arrange == &**VAR_SCREEN_FORMAT { DevConfParsingResult::Ok(screen_format) }
-	else
+	match devconf::PixelFormat::parse(args)
 	{
-		let (element_type, _) = rest.skip_while(is_ignored).take_while(not_ignored);
-		DevConfParsingResult::wrap(PartialEqualityMatchMap!(bit_arrange;
-		{
-			&**CSTR_R8 => PartialEqualityMatchMap!(element_type;
-			{
-				&**CSTR_UNORM => VkFormat::R8_UNORM,
-				&**CSTR_SNORM => VkFormat::R8_SNORM
-			}),
-			&**CSTR_R8G8 => PartialEqualityMatchMap!(element_type;
-			{
-				&**CSTR_UNORM => VkFormat::R8G8_UNORM
-			}),
-			&**CSTR_R8G8B8A8 => PartialEqualityMatchMap!(element_type;
-			{
-				&**CSTR_UNORM => VkFormat::R8G8B8A8_UNORM,
-				&**CSTR_SNORM => VkFormat::R8G8B8A8_SNORM,
-				&**CSTR_SRGB => VkFormat::R8G8B8A8_SRGB
-			}),
-			&**CSTR_R16G16B16A16 => PartialEqualityMatchMap!(element_type;
-			{
-				&**CSTR_SFLOAT => VkFormat::R16G16B16A16_SFLOAT
-			}),
-			&**CSTR_BLOCKCOMPRESSION_4 => PartialEqualityMatchMap!(element_type;
-			{
-				&**CSTR_UNORM => VkFormat::BC4_UNORM_BLOCK,
-				&**CSTR_SNORM => VkFormat::BC4_SNORM_BLOCK
-			}),
-			&**CSTR_BLOCKCOMPRESSION_5 => PartialEqualityMatchMap!(element_type;
-			{
-				&**CSTR_UNORM => VkFormat::BC5_UNORM_BLOCK,
-				&**CSTR_SNORM => VkFormat::BC5_SNORM_BLOCK
-			});
-			_ => None
-		}), DevConfParsingResult::InvalidFormatError)
+		Ok(devconf::PixelFormat::Value(v)) => DevConfParsingResult::Ok(v),
+		Ok(devconf::PixelFormat::Ref(ref v)) if v == "ScreenFormat" => DevConfParsingResult::Ok(screen_format),
+		_ => DevConfParsingResult::InvalidFormatError
 	}
 }
 lazy_static!
@@ -164,25 +120,26 @@ lazy_static!
 	static ref CSTR_INPUTATTACHMENT: Vec<char> = "InputAttachment".chars().collect();
 	static ref CSTR_DEVICELOCAL: Vec<char> = "DeviceLocal".chars().collect();
 }
-pub fn parse_image_usage_flags(args: &[char], agg_usage: VkImageUsageFlags, device_local_flag: bool) -> DevConfParsingResult<(VkImageUsageFlags, bool)>
+pub fn parse_image_usage_flags(args: &mut ParseLine, agg_usage: VkImageUsageFlags, device_local_flag: bool) -> DevConfParsingResult<(VkImageUsageFlags, bool)>
 {
 	if args.is_empty() { DevConfParsingResult::InvalidUsageFlagError("".to_owned()) }
 	else
 	{
-		let (usage_str, rest) = args.take_while(|c| not_ignored(c) && c != '/');
-		let rest = rest.skip_while(is_ignored);
-		let has_next = !rest.is_empty() && rest[0] == '/';
+		let usage_str = args.take_while(|c| not_ignored(c) && c != '/');
 		let current_parsed = PartialEqualityMatchMap!(usage_str;
 		{
-			&**CSTR_SAMPLED => (VK_IMAGE_USAGE_SAMPLED_BIT, false),
-			&**CSTR_COLORATTACHMENT => (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, false),
-			&**CSTR_INPUTATTACHMENT => (VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT, false),
-			&**CSTR_DEVICELOCAL => (0, true)
+			CSTR_SAMPLED[..] => (VK_IMAGE_USAGE_SAMPLED_BIT, false),
+			CSTR_COLORATTACHMENT[..] => (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, false),
+			CSTR_INPUTATTACHMENT[..] => (VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT, false),
+			CSTR_DEVICELOCAL[..] => (0, true)
 		});
 
 		if let Some((usage_bits, devlocal)) = current_parsed
 		{
-			if has_next { parse_image_usage_flags(rest.drop(1).skip_while(is_ignored), agg_usage | usage_bits, device_local_flag | devlocal) }
+			if args.drop_while(is_ignored).front() == Some('/')
+			{
+				parse_image_usage_flags(args.drop_opt(1).drop_while(is_ignored), agg_usage | usage_bits, device_local_flag | devlocal)
+			}
 			else { DevConfParsingResult::Ok((agg_usage | usage_bits, device_local_flag | devlocal)) }
 		}
 		else { DevConfParsingResult::InvalidUsageFlagError(usage_str.clone_as_string()) }
@@ -193,30 +150,30 @@ lazy_static!
 	static ref VAR_SCREEN_WIDTH: Vec<char> = "$ScreenWidth".chars().collect();
 	static ref VAR_SCREEN_HEIGHT: Vec<char> = "$ScreenHeight".chars().collect();
 }
-pub fn parse_image_extent(args: &[char], dims: ImageDimensions, screen_size: &Size2) -> DevConfParsingResult<Size3>
+pub fn parse_image_extent(args: &mut ParseLine, dims: ImageDimensions, screen_size: &Size2) -> DevConfParsingResult<Size3>
 {
-	let parse_arg = |input: &[char]| PartialEqualityMatchMap!(input;
+	let parse_arg = |input: &ParseLine| PartialEqualityMatchMap!(input;
 	{
-		&**VAR_SCREEN_WIDTH => Ok(screen_size.0), &**VAR_SCREEN_HEIGHT => Ok(screen_size.1);
+		&VAR_SCREEN_WIDTH[..] => Ok(screen_size.0), &VAR_SCREEN_HEIGHT[..] => Ok(screen_size.1);
 		_ => input.clone_as_string().parse()
 	});
 	DevConfParsingResult::from(match dims
 	{
-		ImageDimensions::Single => parse_arg(args.take_while(not_ignored).0).map(|val| Size3(val, 1, 1)),
+		ImageDimensions::Single => parse_arg(&args.take_while(not_ignored)).map(|val| Size3(val, 1, 1)),
 		ImageDimensions::Double =>
 		{
-			let (wstr, rest) = args.take_while(not_ignored);
-			let (hstr, _) = rest.skip_while(is_ignored).take_while(not_ignored);
+			let wstr = args.take_while(not_ignored);
+			let hstr = args.drop_while(is_ignored).take_while(not_ignored);
 
-			parse_arg(wstr).and_then(|w| parse_arg(hstr).map(move |h| Size3(w, h, 1)))
+			parse_arg(&wstr).and_then(|w| parse_arg(&hstr).map(move |h| Size3(w, h, 1)))
 		},
 		ImageDimensions::Triple =>
 		{
-			let (wstr, rest) = args.take_while(not_ignored);
-			let (hstr, rest) = rest.skip_while(is_ignored).take_while(not_ignored);
-			let (dstr, _) = rest.skip_while(is_ignored).take_while(not_ignored);
+			let wstr = args.take_while(not_ignored);
+			let hstr = args.drop_while(is_ignored).take_while(not_ignored);
+			let dstr = args.drop_while(is_ignored).take_while(not_ignored);
 
-			parse_arg(wstr).and_then(|w| parse_arg(hstr).and_then(move |h| parse_arg(dstr).map(move |d| Size3(w, h, d))))
+			parse_arg(&wstr).and_then(|w| parse_arg(&hstr).and_then(move |h| parse_arg(&dstr).map(move |d| Size3(w, h, d))))
 		}
 	})
 }
@@ -225,50 +182,53 @@ lazy_static!
 	static ref CSTR_NEAREST: Vec<char> = "Nearest".chars().collect();
 	static ref CSTR_LINEAR: Vec<char> = "Linear".chars().collect();
 }
-pub fn parse_filter_type(args: &[char]) -> DevConfParsingResult<(interlude::Filter, interlude::Filter)>
+pub fn parse_filter_type(args: &mut ParseLine) -> DevConfParsingResult<(interlude::Filter, interlude::Filter)>
 {
-	fn filter_type(slice: &[char]) -> Option<interlude::Filter>
+	use DevConfParsingResult::*;
+
+	fn filter_type(slice: &ParseLine) -> DevConfParsingResult<Filter>
 	{
 		PartialEqualityMatchMap!(slice;
 		{
-			&**CSTR_NEAREST => interlude::Filter::Nearest, &**CSTR_LINEAR => interlude::Filter::Linear
+			&CSTR_NEAREST[..] => Ok(Filter::Nearest),
+			&CSTR_LINEAR[..] => Ok(Filter::Linear);
+			_ => InvalidFilterError(slice.clone_as_string())
 		})
 	}
 
-	let (magf_str, rest) = args.take_while(not_ignored);
-	let rest = rest.skip_while(is_ignored);
-	let magfilter = filter_type(magf_str);
-	let minf_str = if rest.is_empty() { magf_str } else { rest.take_while(not_ignored).0 };
-	let minfilter = filter_type(minf_str);
-
-	match magfilter
+	match filter_type(&args.take_while(not_ignored))
 	{
-		Some(mag) => match minfilter
+		Ok(magfilter) => if args.drop_while(is_ignored).is_empty() { Ok((magfilter, magfilter)) } else
 		{
-			Some(min) => DevConfParsingResult::Ok((mag, min)),
-			_ => DevConfParsingResult::InvalidFilterError(minf_str.clone_as_string())
+			match filter_type(&args.take_while(not_ignored))
+			{
+				Ok(minfilter) => Ok((magfilter, minfilter)),
+				InvalidFilterError(e) => InvalidFilterError(e),
+				_ => unreachable!()
+			}
 		},
-		_ => DevConfParsingResult::InvalidFilterError(magf_str.clone_as_string())
+		InvalidFilterError(e) => InvalidFilterError(e),
+		_ => unreachable!()
 	}
 }
-pub fn parse_component_map(args: &[char]) -> DevConfParsingResult<interlude::ComponentMapping>
+pub fn parse_component_map(args: &mut ParseLine) -> DevConfParsingResult<interlude::ComponentMapping>
 {
-	fn char_to_swizzle(ch: char) -> Option<interlude::ComponentSwizzle>
+	fn char_to_swizzle(ch: Option<char>) -> Option<interlude::ComponentSwizzle>
 	{
 		match ch
 		{
-			'R' | 'r' => Some(interlude::ComponentSwizzle::R),
-			'G' | 'g' => Some(interlude::ComponentSwizzle::G),
-			'B' | 'b' => Some(interlude::ComponentSwizzle::B),
-			'A' | 'a' => Some(interlude::ComponentSwizzle::A),
+			Some('R') | Some('r') => Some(interlude::ComponentSwizzle::R),
+			Some('G') | Some('g') => Some(interlude::ComponentSwizzle::G),
+			Some('B') | Some('b') => Some(interlude::ComponentSwizzle::B),
+			Some('A') | Some('a') => Some(interlude::ComponentSwizzle::A),
 			_ => None
 		}
 	}
 
-	match char_to_swizzle(args[0]).and_then(|r|
-		char_to_swizzle(args[1]).and_then(move |g|
-		char_to_swizzle(args[2]).and_then(move |b|
-		char_to_swizzle(args[3]).map(move |a| interlude::ComponentMapping(r, g, b, a)))))
+	match char_to_swizzle(args.peek(0)).and_then(|r|
+		char_to_swizzle(args.peek(1)).and_then(move |g|
+		char_to_swizzle(args.peek(2)).and_then(move |b|
+		char_to_swizzle(args.peek(3)).map(move |a| ComponentMapping(r, g, b, a)))))
 	{
 		Some(cm) => DevConfParsingResult::Ok(cm),
 		_ => DevConfParsingResult::InvalidSwizzle
@@ -286,8 +246,9 @@ pub fn parse_configuration_image(lines_iter: &mut LazyLines, screen_size: &Size2
 	let (headline, dim) =
 	{
 		let (headline, conf_head) = lines_iter.pop().unwrap();
+		let mut conf_head = ParseLine(conf_head, 0);
 		assert!(conf_head.starts_with(&"Image".chars().collect_vec()));
-		let dim_str = conf_head.drop(5).skip_while(is_ignored).take_until(is_ignored).0.clone_as_string();
+		let dim_str = conf_head.drop_opt(5).drop_while(is_ignored).take_until(is_ignored).clone_as_string();
 		let dim = match dim_str.as_ref()
 		{
 			"1D" => ImageDimensions::Single, "2D" => ImageDimensions::Double, "3D" => ImageDimensions::Triple,
@@ -298,23 +259,20 @@ pub fn parse_configuration_image(lines_iter: &mut LazyLines, screen_size: &Size2
 	};
 
 	let (mut format, mut extent, mut usage, mut component_map) = (None, None, None, ComponentMapping::straight());
-	while let Some((line, pline)) = lines_iter.next()
+	while let Some((line, mut pline)) = devconf::acquire_line(lines_iter, 1)
 	{
-		if pline.is_front_of('-')
+		match devconf::parse_config_name(&mut pline)
 		{
-			lines_iter.drop_line();
-			let (name, rest) = pline.drop(1).skip_while(is_ignored).take_while(|c| not_ignored(c) && c != ':');
-			let value = rest.skip_while(is_ignored).drop(1).skip_while(is_ignored);
-			PartialEqualityMatch!(name;
+			Ok(name) => PartialEqualityMatch!(name;
 			{
-				&**CSTR_FORMAT => format = Some(parse_image_format(value, screen_format).unwrap_on_line(line)),
-				&**CSTR_EXTENT => extent = Some(parse_image_extent(value, dim, screen_size).unwrap_on_line(line)),
-				&**CSTR_USAGE => usage = Some(parse_image_usage_flags(value, 0, false).unwrap_on_line(line)),
-				&**CSTR_COMPONENTMAP => component_map = parse_component_map(value).unwrap_on_line(line);
+				CSTR_FORMAT[..] => format = Some(parse_image_format(pline.drop_while(is_ignored), screen_format).unwrap_on_line(line)),
+				CSTR_EXTENT[..] => extent = Some(parse_image_extent(pline.drop_while(is_ignored), dim, screen_size).unwrap_on_line(line)),
+				CSTR_USAGE[..] => usage = Some(parse_image_usage_flags(pline.drop_while(is_ignored), 0, false).unwrap_on_line(line)),
+				CSTR_COMPONENTMAP[..] => component_map = parse_component_map(pline.drop_while(is_ignored)).unwrap_on_line(line);
 				_ => DevConfParsingResult::UnsupportedParameter("Image".into()).unwrap_on_line(line)
-			});
+			}),
+			Err(_) => DevConfParsingResult::SyntaxError.unwrap_on_line(line)
 		}
-		else { break; }
 	}
 	let (usage, devlocal) = usage.expect(&format!("Usage parameter is not presented at line {}", headline));
 	match dim
@@ -341,28 +299,27 @@ pub fn parse_configuration_image(lines_iter: &mut LazyLines, screen_size: &Size2
 }
 lazy_static!
 {
+	static ref SAMPLER: Vec<char> = "Sampler".chars().collect();
 	static ref CSTR_FILTER: Vec<char> = "Filter".chars().collect();
 }
 pub fn parse_configuration_sampler(lines_iter: &mut LazyLines) -> DevConfSampler
 {
 	{
 		let (_, conf_head) = lines_iter.pop().unwrap();
-		assert!(conf_head.starts_with(&"Sampler".chars().collect_vec()));
+		assert!(conf_head.starts_with(&SAMPLER));
 	}
 
 	let (mut mag_filter, mut min_filter) = (Filter::Linear, Filter::Linear);
-	while let Some((l, s)) = lines_iter.next()
+	while let Some((l, mut s)) = devconf::acquire_line(lines_iter, 1)
 	{
-		if s.is_front_of('-')
+		match devconf::parse_config_name(&mut s)
 		{
-			lines_iter.pop().unwrap();
-			let (name, rest) = s.drop(1).skip_while(is_ignored).take_while(|c| not_ignored(c) && c != ':');
-			let value = rest.skip_while(is_ignored).drop(1).skip_while(is_ignored);
-			PartialEqualityMatch!(name;
+			Ok(name) => PartialEqualityMatch!(name;
 			{
-				&**CSTR_FILTER => { let (magf, minf) = parse_filter_type(value).unwrap_on_line(l); mag_filter = magf; min_filter = minf; };
+				CSTR_FILTER[..]	=> { let (magf, minf) = parse_filter_type(s.drop_while(is_ignored)).unwrap_on_line(l); mag_filter = magf; min_filter = minf; };
 				_ => DevConfParsingResult::UnsupportedParameter("Sampler".into()).unwrap_on_line(l)
-			});
+			}),
+			_ => DevConfParsingResult::SyntaxError.unwrap_on_line(l)
 		}
 	}
 
@@ -378,40 +335,40 @@ mod test
 	use interlude::*;
 	use interlude::ffi::*;
 	use super::*;
-	use super::lazylines::*;
+	use parsetools::*;
 	use itertools::Itertools;
 
 	#[test] fn parse_image_formats()
 	{
-		assert_eq!(parse_image_format(&"R8G8B8A8 UNORM".chars().collect::<Vec<_>>(), VkFormat::R8G8B8A8_SRGB).unwrap(), VkFormat::R8G8B8A8_UNORM);
-		assert_eq!(parse_image_format(&"$ScreenFormat".chars().collect::<Vec<_>>(), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
-		assert_eq!(parse_image_format(&"$ScreenFormat SFLOAT".chars().collect::<Vec<_>>(), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
-		assert!(parse_image_format(&"R8G8B8A8 SFLOAT".chars().collect::<Vec<_>>(), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
-		assert!(parse_image_format(&"aaa TEST".chars().collect::<Vec<_>>(), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
+		assert_eq!(parse_image_format(&mut ParseLine(&"R8G8B8A8 UNORM".chars().collect_vec(), 0), VkFormat::R8G8B8A8_SRGB).unwrap(), VkFormat::R8G8B8A8_UNORM);
+		assert_eq!(parse_image_format(&mut ParseLine(&"$ScreenFormat".chars().collect_vec(), 0), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
+		assert_eq!(parse_image_format(&mut ParseLine(&"$ScreenFormat SFLOAT".chars().collect_vec(), 0), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
+		assert!(parse_image_format(&mut ParseLine(&"R8G8B8A8 SFLOAT".chars().collect_vec(), 0), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
+		assert!(parse_image_format(&mut ParseLine(&"aaa TEST".chars().collect_vec(), 0), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
 	}
 	#[test] fn parse_image_usage()
 	{
-		assert_eq!(parse_image_usage_flags(&"Sampled / DeviceLocal".chars().collect::<Vec<_>>(), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
-		assert_eq!(parse_image_usage_flags(&"Sampled /DeviceLocal".chars().collect::<Vec<_>>(), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
-		assert_eq!(parse_image_usage_flags(&"Sampled".chars().collect::<Vec<_>>(), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, false));
-		assert!(parse_image_usage_flags(&"AsColorTexture/".chars().collect::<Vec<_>>(), 0, false).is_invalid_usage_flag_err());
+		assert_eq!(parse_image_usage_flags(&mut ParseLine(&"Sampled / DeviceLocal".chars().collect_vec(), 0), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
+		assert_eq!(parse_image_usage_flags(&mut ParseLine(&"Sampled /DeviceLocal".chars().collect_vec(), 0), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
+		assert_eq!(parse_image_usage_flags(&mut ParseLine(&"Sampled".chars().collect_vec(), 0), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, false));
+		assert!(parse_image_usage_flags(&mut ParseLine(&"AsColorTexture/".chars().collect_vec(), 0), 0, false).is_invalid_usage_flag_err());
 	}
 	#[test] fn parse_image_extents()
 	{
-		assert_eq!(parse_image_extent(&"640".chars().collect::<Vec<_>>(), ImageDimensions::Single, &Size2(1920, 1080)).unwrap(), Size3(640, 1, 1));
-		assert_eq!(parse_image_extent(&"640 480".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 1));
-		assert_eq!(parse_image_extent(&"640 480 16".chars().collect::<Vec<_>>(), ImageDimensions::Triple, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 16));
-		assert_eq!(parse_image_extent(&"$ScreenWidth $ScreenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(1920, 1080, 1));
-		assert_eq!(parse_image_extent(&"640 $ScreenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 1080, 1));
-		assert!(parse_image_extent(&"$screenwidth $screenHeight".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
-		assert!(parse_image_extent(&"$screenwidth aaa".chars().collect::<Vec<_>>(), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
+		assert_eq!(parse_image_extent(&mut ParseLine(&"640".chars().collect_vec(), 0), ImageDimensions::Single, &Size2(1920, 1080)).unwrap(), Size3(640, 1, 1));
+		assert_eq!(parse_image_extent(&mut ParseLine(&"640 480".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 1));
+		assert_eq!(parse_image_extent(&mut ParseLine(&"640 480 16".chars().collect_vec(), 0), ImageDimensions::Triple, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 16));
+		assert_eq!(parse_image_extent(&mut ParseLine(&"$ScreenWidth $ScreenHeight".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(1920, 1080, 1));
+		assert_eq!(parse_image_extent(&mut ParseLine(&"640 $ScreenHeight".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 1080, 1));
+		assert!(parse_image_extent(&mut ParseLine(&"$screenwidth $screenHeight".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
+		assert!(parse_image_extent(&mut ParseLine(&"$screenwidth aaa".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
 	}
 	#[test] fn parse_filter_types()
 	{
-		assert_eq!(parse_filter_type(&"Nearest ".chars().collect::<Vec<_>>()).unwrap(), (Filter::Nearest, Filter::Nearest));
-		assert_eq!(parse_filter_type(&"Linear".chars().collect::<Vec<_>>()).unwrap(), (Filter::Linear, Filter::Linear));
-		assert_eq!(parse_filter_type(&"Linear Nearest".chars().collect::<Vec<_>>()).unwrap(), (Filter::Linear, Filter::Nearest));
-		assert!(parse_filter_type(&"Bilinear".chars().collect::<Vec<_>>()).is_invalid_filter_type_err());
+		assert_eq!(parse_filter_type(&mut ParseLine(&"Nearest ".chars().collect_vec(), 0)).unwrap(), (Filter::Nearest, Filter::Nearest));
+		assert_eq!(parse_filter_type(&mut ParseLine(&"Linear".chars().collect_vec(), 0)).unwrap(), (Filter::Linear, Filter::Linear));
+		assert_eq!(parse_filter_type(&mut ParseLine(&"Linear Nearest".chars().collect_vec(), 0)).unwrap(), (Filter::Linear, Filter::Nearest));
+		assert!(parse_filter_type(&mut ParseLine(&"Bilinear".chars().collect_vec(), 0)).is_invalid_filter_type_err());
 	}
 	#[test] fn parse_image_conf()
 	{
@@ -441,12 +398,6 @@ mod test
 }
 
 #[derive(Debug)]
-enum NextInstruction
-{
-	Comment, Empty, Image, Sampler
-}
-
-#[derive(Debug)]
 pub enum DevConfImage
 {
 	Dim1 { format: VkFormat, extent: u32, usage: VkImageUsageFlags, device_local: bool, component_map: interlude::ComponentMapping },
@@ -467,6 +418,10 @@ pub struct DevConfImagesWithStaging
 	samplers: Vec<interlude::Sampler>,
 	#[allow(dead_code)] device_images: interlude::DeviceImage, staging_images: interlude::StagingImage
 }
+lazy_static!
+{
+	static ref IMAGE: Vec<char> = "Image".chars().collect();
+}
 impl DevConfImages
 {
 	pub fn from_file<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(engine: &Engine, asset_path: &str, screen_size: &Size2, screen_format: VkFormat)
@@ -478,28 +433,22 @@ impl DevConfImages
 		let mut flines = LazyLines::new(&fchars);
 
 		let (mut images, mut samplers) = (Vec::new(), Vec::new());
-		while let Some(next) = flines.next().map(|(headline, line)| if line.is_empty() { NextInstruction::Empty }
-			else if line.is_front_of('#') { NextInstruction::Comment }
-			else if line.starts_with(&"Image".chars().collect_vec()) { NextInstruction::Image }
-			else if line.starts_with(&"Sampler".chars().collect_vec()) { NextInstruction::Sampler }
-			else { DevConfParsingResult::UnknownConfiguration.unwrap_on_line(headline) })
+		while let Some((nline, s)) = flines.next()
 		{
-			match next
+			if s.is_empty() || s[0] == '#' { flines.pop(); }
+			else if s.starts_with(&IMAGE)
 			{
-				NextInstruction::Empty | NextInstruction::Comment => { flines.pop(); },
-				NextInstruction::Image =>
-				{
-					let obj = parse_configuration_image(&mut flines, screen_size, screen_format);
-					println!("Found {:?}", obj);
-					images.push(obj);
-				},
-				NextInstruction::Sampler =>
-				{
-					let obj = parse_configuration_sampler(&mut flines);
-					println!("Found {:?}", obj);
-					samplers.push(obj);
-				}
+				let obj = parse_configuration_image(&mut flines, screen_size, screen_format);
+				println!("Found {:?}", obj);
+				images.push(obj);
 			}
+			else if s.starts_with(&SAMPLER)
+			{
+				let obj = parse_configuration_sampler(&mut flines);
+				println!("Found {:?}", obj);
+				samplers.push(obj);
+			}
+			else { DevConfParsingResult::UnknownConfiguration::<()>.unwrap_on_line(nline); }
 		}
 
 		// FIXME: Device Local flags for Image 3D

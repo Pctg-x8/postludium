@@ -393,7 +393,7 @@ pub struct ParsedDeviceResources
 	pub framebuffers: NamedContents<FramebufferInfo>
 }
 
-fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, ParseLine<'s>)>
+pub fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, ParseLine<'s>)>
 {
 	const HEAD: [char; 3] = ['-'; 3];
 
@@ -509,7 +509,7 @@ fn parse_extern_resources(input: &mut ParseLine) -> Result<ExternalResourceData,
 		_ => Err(ParseError::UnknownExternalResource(s.current()))
 	}
 }
-fn parse_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'s>, ParseError>
+pub fn parse_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'s>, ParseError>
 {
 	let name = source.take_until(ident_break);
 	if source.drop_while(ignore_chars).front() != Some(':') { Err(ParseError::DelimiterRequired(source.current())) }
