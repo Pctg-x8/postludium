@@ -182,6 +182,10 @@ impl PixelFormat
 				("R16G16B16A16", "UNORM") => Ok(VkFormat::R16G16B16A16_UNORM),
 				("R16G16B16A16", "SNORM") => Ok(VkFormat::R16G16B16A16_SNORM),
 				("R16G16B16A16", "SFLOAT") => Ok(VkFormat::R16G16B16A16_SFLOAT),
+				("BlockCompression4", "UNORM") => Ok(VkFormat::BC4_UNORM_BLOCK),
+				("BlockCompression4", "SNORM") => Ok(VkFormat::BC4_SNORM_BLOCK),
+				("BlockCompression5", "UNORM") => Ok(VkFormat::BC5_UNORM_BLOCK),
+				("BlockCompression5", "SNORM") => Ok(VkFormat::BC5_SNORM_BLOCK),
 				_ => Err(ParseError::UnknownFormat(bits.current()))
 			}.map(PixelFormat::Value)
 		}
