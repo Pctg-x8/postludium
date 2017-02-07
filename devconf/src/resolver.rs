@@ -2,6 +2,7 @@
 
 use super::*;
 use vk::*;
+use std;
 
 pub struct ErrorReporter { has_error: bool }
 impl ErrorReporter
