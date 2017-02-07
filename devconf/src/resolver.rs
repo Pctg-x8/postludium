@@ -83,3 +83,27 @@ impl RPSubpassDeps
 		}
 	}
 }
+
+/// Short-circuit for { |x| o.f(x) }
+macro_rules! Delegate
+{
+	($o: expr => $f: ident) => { |x| $o.$f(x) }
+}
+
+pub struct PreciseRenderPass { pub obj: usize, pub subpass: usize }
+impl PreciseRenderPassRef
+{
+	pub fn resolve(self, parent: &ParsedDeviceResources, er: &mut ErrorReporter) -> PreciseRenderPass
+	{
+		let ox = self.rp.resolve(er, Delegate!(parent.renderpasses => reverse_index)).unwrap_or(0);
+		if !er.has_error
+		{
+			let ref o = parent.renderpasses[ox];
+			PreciseRenderPass
+			{
+				obj: ox, subpass: self.subpass.resolve(er, Delegate!(o.subpasses => reverse_index)).unwrap_or(0)
+			}
+		}
+		else { PreciseRenderPass { obj: 0, subpass: 0 } }
+	}
+}
