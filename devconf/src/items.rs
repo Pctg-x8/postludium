@@ -182,10 +182,10 @@ impl PixelFormat
 				("R16G16B16A16", "UNORM") => Ok(VkFormat::R16G16B16A16_UNORM),
 				("R16G16B16A16", "SNORM") => Ok(VkFormat::R16G16B16A16_SNORM),
 				("R16G16B16A16", "SFLOAT") => Ok(VkFormat::R16G16B16A16_SFLOAT),
-				("BlockCompression4", "UNORM") => Ok(VkFormat::BC4_UNORM_BLOCK),
-				("BlockCompression4", "SNORM") => Ok(VkFormat::BC4_SNORM_BLOCK),
-				("BlockCompression5", "UNORM") => Ok(VkFormat::BC5_UNORM_BLOCK),
-				("BlockCompression5", "SNORM") => Ok(VkFormat::BC5_SNORM_BLOCK),
+				("BLOCKCOMPRESSION4", "UNORM") | ("BC4", "UNORM") => Ok(VkFormat::BC4_UNORM_BLOCK),
+				("BLOCKCOMPRESSION4", "SNORM") | ("BC4", "SNORM") => Ok(VkFormat::BC4_SNORM_BLOCK),
+				("BLOCKCOMPRESSION5", "UNORM") | ("BC5", "UNORM") => Ok(VkFormat::BC5_UNORM_BLOCK),
+				("BLOCKCOMPRESSION5", "SNORM") | ("BC5", "SNORM") => Ok(VkFormat::BC5_SNORM_BLOCK),
 				_ => Err(ParseError::UnknownFormat(bits.current()))
 			}.map(PixelFormat::Value)
 		}
@@ -416,6 +416,7 @@ pub fn parse_string_literal(source: &mut ParseLine) -> Result<String, ParseError
 		{
 			PixelFormat::parse; "R8G8B8A8 UNORM" => Ok(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM)),
 			PixelFormat::parse; "R8G8b8A8 Unorm" => Ok(PixelFormat::Value(VkFormat::R8G8B8A8_UNORM)),
+			PixelFormat::parse; "BlockCompression5 Unorm" => Ok(PixelFormat::Value(VkFormat::BC5_UNORM_BLOCK)),
 			PixelFormat::parse; "$ScreenFormat" => Ok(PixelFormat::Ref("ScreenFormat".into())),
 			PixelFormat::parse; "R8G8B8A8 SF" => Err(ParseError::UnknownFormat(0))
 		}
