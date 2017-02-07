@@ -1,6 +1,7 @@
 // Resolving ConfigInt to contextual integer values
 
 use super::*;
+use vk::*;
 
 pub struct ErrorReporter { has_error: bool }
 impl ErrorReporter
