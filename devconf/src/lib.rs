@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use parsetools::*;
 use std::borrow::Cow;
 use vk::*;
+use std::path::PathBuf;
 
 #[macro_use] mod items;
 pub use items::*;
@@ -337,7 +338,8 @@ pub enum ParseError
 	DelimiterRequired(usize), ClosingRequired(usize), DefinitionOverrided, CorruptedSubpassDesc(usize),
 	UnknownPipelineStageFlag(usize), UnknownAccessFlag(usize), Expected(&'static str, usize), UnknownConfig(&'static str), ConfigRequired(&'static str),
 	UnknownExternalResource(usize), UnknownClearMode(usize), FormatRequired(usize), UnknownObjectRef(&'static str, usize), UnknownShaderStageFlag(usize),
-	UnknownDescriptorKind(usize), BytesizeRequired(usize), UnknownPrimitiveTopology(bool, usize)
+	UnknownDescriptorKind(usize), BytesizeRequired(usize), UnknownPrimitiveTopology(bool, usize),
+	NameNotAllowed(usize)
 }
 trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
 impl<T> DivergenceExt<T> for Result<T, ParseError>
@@ -374,13 +376,15 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 			Err(ParseError::FloatingParseError(n, p)) => panic!("FloatingParseError: {} at line {}, col {}", n, line, p),
 			Err(ParseError::Expected(s, p)) => panic!("Expected {}, but it was not found at line {}, col {}", s, line, p),
 			Err(ParseError::UnknownConfig(s)) => panic!("Unknown Config for {} was found at line {}", s, line),
-			Err(ParseError::ConfigRequired(c)) => panic!("Configuration \"{}\" required at line {}", c, line)
+			Err(ParseError::ConfigRequired(c)) => panic!("Configuration \"{}\" required at line {}", c, line),
+			Err(ParseError::NameNotAllowed(p)) => panic!("Naming not allowed for the configuration at line {}, col {}", line, p)
 		}
 	}
 }
 
 pub struct ParsedDeviceResources
 {
+	pub includes: Vec<PathBuf>,
 	pub renderpasses: NamedContents<RenderPassData>,
 	pub simple_rps: NamedContents<SimpleRenderPassData>,
 	pub presented_rps: NamedContents<PresentedRenderPassData>,
@@ -391,6 +395,20 @@ pub struct ParsedDeviceResources
 	pub pipeline_states: NamedContents<PipelineStateInfo>,
 	pub externs: NamedContents<ExternalResourceData>,
 	pub framebuffers: NamedContents<FramebufferInfo>
+}
+impl ParsedDeviceResources
+{
+	pub fn empty() -> Self
+	{
+		ParsedDeviceResources
+		{
+			includes: Vec::new(),
+			renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
+			descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
+			pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
+			externs: NamedContents::new(), framebuffers: NamedContents::new()
+		}
+	}
 }
 
 pub fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usize, ParseLine<'s>)>
@@ -413,77 +431,71 @@ fn ident_break(c: char) -> bool
 {
 	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
 }
-pub fn parse_device_resources(lines: &mut LazyLines) -> ParsedDeviceResources
+pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut LazyLines)
 {
-	let mut pdr = ParsedDeviceResources
-	{
-		renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
-		descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
-		pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
-		externs: NamedContents::new(), framebuffers: NamedContents::new()
-	};
-
 	while let Some((l, mut source)) = acquire_line(lines, 0)
 	{
+		let insource = source.current();
 		let NamedConfigLine { name, .. } = NamedConfigLine::parse_noargs(&mut source).report_error(l);
 		let s = source.drop_while(ignore_chars).take_until(ident_break);
 		match s.clone_as_string().as_ref()
 		{
+			// Include <StringLiteral>
+			"Include" => parse_string_literal(source.drop_while(ignore_chars)).map(From::from)
+				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(sink.includes.push(p)) }).report_error(l),
 			"RenderPass" =>
 			{
 				let p = parse_renderpass(lines);
-				if let Some(name) = name { pdr.renderpasses.insert(name.into(), p); } else { pdr.renderpasses.insert_unnamed(p); }
+				if let Some(name) = name { sink.renderpasses.insert(name.into(), p); } else { sink.renderpasses.insert_unnamed(p); }
 			},
 			"SimpleRenderPass" =>
 			{
 				let p = parse_simple_renderpass(l, lines);
-				if let Some(name) = name { pdr.simple_rps.insert(name.into(), p); } else { pdr.simple_rps.insert_unnamed(p); }
+				if let Some(name) = name { sink.simple_rps.insert(name.into(), p); } else { sink.simple_rps.insert_unnamed(p); }
 			},
 			"PresentedRenderPass" =>
 			{
 				let p = parse_presented_renderpass(l, lines);
-				if let Some(name) = name { pdr.presented_rps.insert(name.into(), p); } else { pdr.presented_rps.insert_unnamed(p); }
+				if let Some(name) = name { sink.presented_rps.insert(name.into(), p); } else { sink.presented_rps.insert_unnamed(p); }
 			},
 			"DescriptorSetLayout" =>
 			{
 				let p = parse_descriptor_set_layout(lines);
-				if let Some(name) = name { pdr.descriptor_set_layouts.insert(name.into(), p); } else { pdr.descriptor_set_layouts.insert_unnamed(p); }
+				if let Some(name) = name { sink.descriptor_set_layouts.insert(name.into(), p); } else { sink.descriptor_set_layouts.insert_unnamed(p); }
 			},
 			"PushConstantLayout" =>
 			{
 				let p = parse_push_constant_layout(lines).report_error(l);
-				if let Some(name) = name { pdr.push_constant_layouts.insert(name.into(), p); } else { pdr.push_constant_layouts.insert_unnamed(p); }
+				if let Some(name) = name { sink.push_constant_layouts.insert(name.into(), p); } else { sink.push_constant_layouts.insert_unnamed(p); }
 			},
 			"PipelineLayout" =>
 			{
 				let p = parse_pipeline_layout(lines);
-				if let Some(name) = name { pdr.pipeline_layouts.insert(name.into(), p); } else { pdr.pipeline_layouts.insert_unnamed(p); }
+				if let Some(name) = name { sink.pipeline_layouts.insert(name.into(), p); } else { sink.pipeline_layouts.insert_unnamed(p); }
 			},
 			"DescriptorSets" =>
 			{
 				let p = parse_descriptor_sets(lines);
-				if let Some(name) = name { pdr.descriptor_sets.insert(name.into(), p); } else { pdr.descriptor_sets.insert_unnamed(p); }
+				if let Some(name) = name { sink.descriptor_sets.insert(name.into(), p); } else { sink.descriptor_sets.insert_unnamed(p); }
 			},
 			"PipelineState" =>
 			{
 				let p = parse_pipeline_state(l, source.drop_while(ignore_chars), lines);
-				if let Some(name) = name { pdr.pipeline_states.insert(name.into(), p); } else { pdr.pipeline_states.insert_unnamed(p); }
+				if let Some(name) = name { sink.pipeline_states.insert(name.into(), p); } else { sink.pipeline_states.insert_unnamed(p); }
 			},
 			"Extern" =>
 			{
 				let p = parse_extern_resources(source.drop_while(ignore_chars)).report_error(l);
-				if let Some(name) = name { pdr.externs.insert(name.into(), p); } else { pdr.externs.insert_unnamed(p); }
+				if let Some(name) = name { sink.externs.insert(name.into(), p); } else { sink.externs.insert_unnamed(p); }
 			},
 			"Framebuffer" =>
 			{
 				let p = parse_framebuffer(source.drop_while(ignore_chars), lines).report_error(l);
-				if let Some(name) = name { pdr.framebuffers.insert(name.into(), p); } else { pdr.framebuffers.insert_unnamed(p); }
+				if let Some(name) = name { sink.framebuffers.insert(name.into(), p); } else { sink.framebuffers.insert_unnamed(p); }
 			},
 			_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(l)
 		};
 	}
-
-	pdr
 }
 fn parse_extern_resources(input: &mut ParseLine) -> Result<ExternalResourceData, ParseError>
 {

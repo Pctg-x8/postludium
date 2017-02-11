@@ -10,9 +10,11 @@ use parsetools::*;
 use itertools::Itertools;
 use vk::*;
 
-#[test] fn parse_renderpass()
+#[test] fn parse_script()
 {
-	let testcase = "$FirstRP: RenderPass
+	let mut pdr = ParsedDeviceResources::empty();
+	let testcase = "
+$FirstRP: RenderPass
 - Attachments:
 -- $Backbuffer: R16G16B16A16 SFLOAT, ColorAttachmentOptimal, ClearOnLoad
 -- $TonemapRes: $ScreenFormat, ColorAttachmentOptimal -> ShaderReadOnlyOptimal, PreserveContent
@@ -35,33 +37,32 @@ $SMAACombineRP: PresentedRenderPass
 #- ClearMode: None
 ".chars().collect_vec();
 	let mut testlines = LazyLines::new(&testcase);
-	let r = parse_device_resources(&mut testlines);
-	assert_eq!(r.renderpasses["FirstRP"].attachments["Backbuffer"], RPAttachment
+	parse_device_resources(&mut pdr, &mut testlines);
+	assert_eq!(pdr.renderpasses["FirstRP"].attachments["Backbuffer"], RPAttachment
 	{
 		format: PixelFormat::Value(VkFormat::R16G16B16A16_SFLOAT), clear_on_load: Some(true), preserve_content: false,
 		layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ColorAttachmentOptimal }
 	});
-	assert_eq!(r.renderpasses["FirstRP"].attachments["TonemapRes"], RPAttachment
+	assert_eq!(pdr.renderpasses["FirstRP"].attachments["TonemapRes"], RPAttachment
 	{
 		format: PixelFormat::Ref("ScreenFormat".into()), clear_on_load: None, preserve_content: true,
 		layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 	});
-	assert_eq!(r.renderpasses["FirstRP"].attachments[0], r.renderpasses["FirstRP"].attachments["Backbuffer"]);
-	assert_eq!(r.renderpasses["FirstRP"].subpasses["StdRender"], RPSubpassDesc
+	assert_eq!(pdr.renderpasses["FirstRP"].subpasses["StdRender"], RPSubpassDesc
 	{
 		color_outs: vec![ConfigInt::Ref("Backbuffer".into())], inputs: Vec::new()
 	});
-	assert_eq!(r.renderpasses["FirstRP"].subpasses["Tonemapping"], RPSubpassDesc
+	assert_eq!(pdr.renderpasses["FirstRP"].subpasses["Tonemapping"], RPSubpassDesc
 	{
 		color_outs: vec![ConfigInt::Ref("TonemapRes".into())], inputs: vec![ConfigInt::Ref("Backbuffer".into())]
 	});
-	assert_eq!(r.renderpasses["FirstRP"].deps[0], RPSubpassDeps
+	assert_eq!(pdr.renderpasses["FirstRP"].deps[0], RPSubpassDeps
 	{
 		passtrans: Transition { from: ConfigInt::Ref("StdRender".into()), to: ConfigInt::Ref("Tonemapping".into()) },
 		access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
 		stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: true
 	});
-	assert_eq!(r.simple_rps["SMAAEdgeDetectRP"], SimpleRenderPassData { format: PixelFormat::Value(VkFormat::R8G8_UNORM), clear_on_load: Some(true) });
-	assert_eq!(r.simple_rps["SMAABlendWeightRP"], SimpleRenderPassData { format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), clear_on_load: Some(true) });
-	assert_eq!(r.presented_rps["SMAACombineRP"], PresentedRenderPassData { format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), clear_on_load: None });
+	assert_eq!(pdr.simple_rps["SMAAEdgeDetectRP"], SimpleRenderPassData { format: PixelFormat::Value(VkFormat::R8G8_UNORM), clear_on_load: Some(true) });
+	assert_eq!(pdr.simple_rps["SMAABlendWeightRP"], SimpleRenderPassData { format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), clear_on_load: Some(true) });
+	assert_eq!(pdr.presented_rps["SMAACombineRP"], PresentedRenderPassData { format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), clear_on_load: None });
 }
