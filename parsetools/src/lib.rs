@@ -34,15 +34,17 @@ impl CharSliceSafetyExt for [char]
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ParseLine<'s>(pub &'s [char], pub usize);
+pub struct ParseLine<'s>(&'s [char], usize, usize);
 impl<'s> PartialEq<[char]> for ParseLine<'s>
 {
 	fn eq(&self, right: &[char]) -> bool { self.0 == right }
 }
 impl<'s> ParseLine<'s>
 {
+	pub fn wrap(s: &'s [char], col: usize, line: usize) -> Self { ParseLine(s, col, line) }
 	pub fn is_empty(&self) -> bool { self.0.is_empty() }
 	pub fn current(&self) -> usize { self.1 }
+	pub fn line(&self) -> usize { self.2 }
 	pub fn len(&self) -> usize { self.0.len() }
 	pub fn chars(&self) -> &'s [char] { self.0 }
 
@@ -83,13 +85,13 @@ impl<'s> ParseLine<'s>
 			let start = self.clone();
 			let mut counter = 0;
 			while self.front().map(&pred).unwrap_or(false) { counter += 1; self.drop_one(); }
-			ParseLine(&start.0[..counter], start.1)
+			ParseLine(&start.0[..counter], start.1, self.2)
 		}
 		else
 		{
 			let mut counter = 0;
 			while self.peek(counter).map(&pred).unwrap_or(false) { counter += 1; }
-			let r = ParseLine(&self.0[..counter], self.1);
+			let r = ParseLine(&self.0[..counter], self.1, self.2);
 			self.drop_opt(counter);
 			r
 		}

@@ -66,18 +66,22 @@ pub struct DeviceResources
 
 // Source Representations
 #[derive(Debug, PartialEq)]
-pub struct RPAttachment { pub format: PixelFormat, pub layouts: Transition<VkImageLayout>, pub clear_on_load: Option<bool>, pub preserve_content: bool }
+pub struct RPAttachment { pub format: LocationPacked<Format>, pub layouts: Transition<VkImageLayout>, pub clear_on_load: Option<bool>, pub preserve_content: bool }
 #[derive(Debug, PartialEq)]
-pub struct RPSubpassDesc { pub color_outs: Vec<ConfigInt>, pub inputs: Vec<ConfigInt> }
+pub struct RPSubpassDesc { pub color_outs: Vec<LocationPacked<ConfigInt>>, pub inputs: Vec<LocationPacked<ConfigInt>> }
 #[derive(Debug, PartialEq)]
-pub struct RPSubpassDeps { pub passtrans: Transition<ConfigInt>, pub access_mask: Transition<VkAccessFlags>, pub stage_bits: VkPipelineStageFlags, pub by_region: bool }
+pub struct RPSubpassDeps
+{
+	pub passtrans: Transition<LocationPacked<ConfigInt>>, pub access_mask: Transition<LocationPacked<VkAccessFlags>>,
+	pub stage_bits: LocationPacked<VkPipelineStageFlags>, pub by_region: bool
+}
 pub struct RenderPassData { pub attachments: NamedContents<RPAttachment>, pub subpasses: NamedContents<RPSubpassDesc>, pub deps: Vec<RPSubpassDeps> }
 #[derive(Debug, PartialEq)]
-pub struct SimpleRenderPassData { pub format: PixelFormat, pub clear_on_load: Option<bool> }
+pub struct SimpleRenderPassData { pub format: LocationPacked<Format>, pub clear_on_load: Option<bool> }
 #[derive(Debug, PartialEq)]
-pub struct PresentedRenderPassData { pub format: PixelFormat, pub clear_on_load: Option<bool> }
+pub struct PresentedRenderPassData { pub format: LocationPacked<Format>, pub clear_on_load: Option<bool> }
 #[derive(Debug, PartialEq)]
-pub struct PreciseRenderPassRef { pub rp: ConfigInt, pub subpass: ConfigInt }
+pub struct PreciseRenderPassRef { pub rp: LocationPacked<ConfigInt>, pub subpass: LocationPacked<ConfigInt> }
 impl PreciseRenderPassRef
 {
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
@@ -93,17 +97,17 @@ impl PreciseRenderPassRef
 #[derive(Debug, PartialEq)]
 pub enum ExternalResourceData
 {
-	ImageView { dim: u8, refname: String }, SwapChainViews
+	ImageView { dim: u8, refname: LocationPacked<String> }, SwapChainViews
 }
 #[derive(Debug, PartialEq)]
 pub enum FramebufferStyle
 {
-	WithRenderPass(ConfigInt), Simple(Option<bool>), Presented(Option<bool>)
+	WithRenderPass(LocationPacked<ConfigInt>), Simple(Option<bool>), Presented(Option<bool>)
 }
 #[derive(Debug, PartialEq)]
 pub struct FramebufferInfo
 {
-	style: FramebufferStyle, views: Vec<ConfigInt>
+	style: FramebufferStyle, views: Vec<LocationPacked<ConfigInt>>
 }
 #[derive(Debug, PartialEq)]
 pub enum BufferDescriptorOption { None, TexelStore, DynamicOffset }
@@ -116,22 +120,22 @@ pub enum DescriptorEntryKind
 #[derive(Debug, PartialEq)]
 pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility: VkShaderStageFlags }
 #[derive(Debug, PartialEq)]
-pub struct PushConstantLayout { range: std::ops::Range<usize>, visibility: VkShaderStageFlags }
+pub struct PushConstantLayout { range: LocationPacked<std::ops::Range<usize>>, visibility: VkShaderStageFlags }
 #[derive(Debug, PartialEq)]
-pub struct PipelineLayout { descs: Vec<ConfigInt>, pushconstants: Vec<ConfigInt> }
+pub struct PipelineLayout { descs: Vec<LocationPacked<ConfigInt>>, pushconstants: Vec<LocationPacked<ConfigInt>> }
 #[derive(Debug, PartialEq)]
 pub struct DescriptorSetsInfo(Vec<DescriptorSetEntry>);
 #[derive(Debug, PartialEq)]
-pub struct DescriptorSetEntry { name: Option<String>, layout: ConfigInt }
+pub struct DescriptorSetEntry { name: Option<String>, layout: LocationPacked<ConfigInt> }
 #[derive(Debug, PartialEq)]
 pub struct PipelineShaderStageInfo
 {
-	asset: AssetResource, consts: HashMap<u32, NumericLiteral>
+	asset: LocationPacked<AssetResource>, consts: HashMap<u32, LocationPacked<NumericLiteral>>
 }
 #[derive(Debug, PartialEq)]
 pub struct PipelineStateInfo
 {
-	renderpass: PreciseRenderPassRef, layout_ref: ConfigInt,
+	renderpass: PreciseRenderPassRef, layout_ref: LocationPacked<ConfigInt>,
 	vertex_shader: PipelineShaderStageInfo, geometry_shader: Option<PipelineShaderStageInfo>, fragment_shader: Option<PipelineShaderStageInfo>,
 	tesscontrol_shader: Option<PipelineShaderStageInfo>, tessevaluation_shader: Option<PipelineShaderStageInfo>,
 	primitive_topology: VkPrimitiveTopology, viewport_scissors: Vec<ViewportScissorEntry>, blendstates: Vec<AttachmentBlendState>
@@ -384,7 +388,7 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 
 pub struct ParsedDeviceResources
 {
-	pub includes: Vec<PathBuf>,
+	pub includes: Vec<LocationPacked<PathBuf>>,
 	pub renderpasses: NamedContents<RenderPassData>,
 	pub simple_rps: NamedContents<SimpleRenderPassData>,
 	pub presented_rps: NamedContents<PresentedRenderPassData>,
@@ -419,7 +423,7 @@ pub fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<(usiz
 		else if s.starts_with_trailing_opt(&HEAD[..level], |c| c != '-')
 		{
 			lines.drop_line();
-			let mut s = ParseLine(&s[level..], level);
+			let mut s = ParseLine::wrap(&s[level..], level, l);
 			s.drop_while(ignore_chars);
 			Some((l, s))
 		}
@@ -441,7 +445,7 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut Lazy
 		match s.clone_as_string().as_ref()
 		{
 			// Include <StringLiteral>
-			"Include" => parse_string_literal(source.drop_while(ignore_chars)).map(From::from)
+			"Include" => parse_string_literal(source.drop_while(ignore_chars)).map(PartialApply1!(LocationPacked::rewrap; From::from))
 				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(sink.includes.push(p)) }).report_error(l),
 			"RenderPass" =>
 			{
@@ -599,7 +603,7 @@ fn parse_simple_renderpass(line_in: usize, source: &mut LazyLines) -> SimpleRend
 	{
 		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
 		{
-			FORMAT[..] => PixelFormat::parse(s.drop_while(ignore_chars))
+			FORMAT[..] => Format::parse(s.drop_while(ignore_chars))
 				.and_then(|f| if fmt.is_none() { fmt = Some(f); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
 			CLEARMODE[..] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () });
 			_ => Err(ParseError::UnknownConfig("SimpleRenderPass"))
@@ -618,7 +622,7 @@ fn parse_presented_renderpass(line_in: usize, source: &mut LazyLines) -> Present
 	{
 		parse_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
 		{
-			FORMAT[..] => PixelFormat::parse(s.drop_while(ignore_chars))
+			FORMAT[..] => Format::parse(s.drop_while(ignore_chars))
 				.and_then(|f| if fmt.is_none() { fmt = Some(f); Ok(()) } else { Err(ParseError::DefinitionOverrided) }),
 			CLEARMODE[..] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () });
 			_ => Err(ParseError::UnknownConfig("PresentedRenderPass"))
@@ -634,13 +638,13 @@ lazy_static!
 {
 	static ref PRESENTED: Vec<char> = "Presented".chars().collect();
 }
-#[cfg_attr(test, derive(Debug, PartialEq))]
-enum FramebufferRenderPassRef { Int(ConfigInt), Presented, None }
+#[derive(Debug, PartialEq)]
+enum FramebufferRenderPassRef { Int(LocationPacked<ConfigInt>), Presented, None }
 fn parse_framebuffer_rp(input: &mut ParseLine) -> Result<FramebufferRenderPassRef, ParseError>
 {
 	if input.front() == Some('<')
 	{
-		// Which Parameter; "Presented" / int
+		// Which Parameter: "Presented" / int
 		input.drop_opt(1).drop_while(ignore_chars);
 		let p = if input.front().map(|c| ('0' <= c && c <= '9') || c == '$').unwrap_or(false)
 		{
@@ -726,7 +730,7 @@ fn parse_descriptor_entry(source: &mut ParseLine) -> Result<DescriptorEntry, Par
 	}
 	else { Ok(1) };
 	count.and_then(|count| parse_config_name(source.drop_while(ignore_chars)).and_then(descriptor_entry_kind)
-		.and_then(|ntype| parse_shader_stage_bits(source.drop_while(ignore_chars)).map(|ss| DescriptorEntry { count: count, kind: ntype, visibility: ss })))
+		.and_then(|ntype| parse_shader_stage_bits(source.drop_while(ignore_chars)).map(|ss| DescriptorEntry { count: count, kind: ntype, visibility: ss.unwrap() })))
 }
 lazy_static!
 {
@@ -748,7 +752,7 @@ fn parse_push_constant_layout(source: &mut LazyLines) -> Result<PushConstantLayo
 		})).report_error(l);
 	}
 	range.ok_or(ParseError::ConfigRequired("Range"))
-	.and_then(|range| vis.ok_or(ParseError::ConfigRequired("Visibility")).map(|vis| PushConstantLayout { range: range, visibility: vis }))
+		.and_then(|range| vis.ok_or(ParseError::ConfigRequired("Visibility")).map(|vis| PushConstantLayout { range: range, visibility: vis.unwrap() }))
 }
 lazy_static!
 {
@@ -941,12 +945,12 @@ lazy_static!
 // pixel_format "," transition_opt#image_layout "," option,*
 fn parse_rp_attachment(source: &mut ParseLine) -> Result<RPAttachment, ParseError>
 {
-	PixelFormat::parse(source).and_then(|format|
+	Format::parse(source).and_then(|format|
 	{
 		if source.drop_while(ignore_chars).front() != Some(',') { Err(ParseError::DelimiterRequired(source.current())) }
 		else
 		{
-			Transition::parse_opt(source.drop_opt(1).drop_while(ignore_chars), parse_image_layout).map(|layouts| (format, layouts))
+			Transition::parse_opt(source.drop_opt(1).drop_while(ignore_chars), |x| parse_image_layout(x).map(LocationPacked::unwrap)).map(|layouts| (format, layouts))
 		}
 	}).map(|(format, layouts)| RPAttachment { format: format, layouts: layouts, clear_on_load: None, preserve_content: false })
 	.and_then(|mut rpa|
@@ -1094,8 +1098,10 @@ fn at_token(input: &mut ParseLine) -> bool
 	{
 		Testing!
 		{
-			PreciseRenderPassRef::parse; "0.1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Value(0), subpass: ConfigInt::Value(1) }),
-			PreciseRenderPassRef::parse; "$First .1" => Ok(PreciseRenderPassRef { rp: ConfigInt::Ref("First".into()), subpass: ConfigInt::Value(1) }),
+			PreciseRenderPassRef::parse; "0.1"
+				=> Ok(PreciseRenderPassRef { rp: LocationPacked(1, 0, ConfigInt::Value(0)), subpass: LocationPacked(1, 2, ConfigInt::Value(1)) }),
+			PreciseRenderPassRef::parse; "$First .1"
+				=> Ok(PreciseRenderPassRef { rp: LocationPacked(1, 0, ConfigInt::Ref("First".into())), subpass: LocationPacked(1, 8, ConfigInt::Value(1)) }),
 			PreciseRenderPassRef::parse; "$Final" => Err(ParseError::Expected("PreciseRenderPassRef", 0))
 		}
 	}
@@ -1158,21 +1164,21 @@ fn at_token(input: &mut ParseLine) -> bool
 		{
 			parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage, ByRegion" => Ok(RPSubpassDeps
 			{
-				passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
-				access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
-				stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: true
+				passtrans: Transition { from: LocationPacked(1, 0, ConfigInt::Value(0)), to: LocationPacked(1, 5, ConfigInt::Value(1)) },
+				access_mask: Transition { from: LocationPacked(1, 8, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT), to: LocationPacked(1, 32, VK_ACCESS_SHADER_READ_BIT) },
+				stage_bits: LocationPacked(1, 45, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: true
 			}),
 			parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage" => Ok(RPSubpassDeps
 			{
-				passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
-				access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
-				stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: false
+				passtrans: Transition { from: LocationPacked(1, 0, ConfigInt::Value(0)), to: LocationPacked(1, 5, ConfigInt::Value(1)) },
+				access_mask: Transition { from: LocationPacked(1, 8, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT), to: LocationPacked(1, 32, VK_ACCESS_SHADER_READ_BIT) },
+				stage_bits: LocationPacked(1, 45, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: false
 			}),
 			parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage," => Ok(RPSubpassDeps
 			{
-				passtrans: Transition { from: ConfigInt::Value(0), to: ConfigInt::Value(1) },
-				access_mask: Transition { from: VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, to: VK_ACCESS_SHADER_READ_BIT },
-				stage_bits: VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, by_region: false
+				passtrans: Transition { from: LocationPacked(1, 0, ConfigInt::Value(0)), to: LocationPacked(1, 5, ConfigInt::Value(1)) },
+				access_mask: Transition { from: LocationPacked(1, 8, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT), to: LocationPacked(1, 32, VK_ACCESS_SHADER_READ_BIT) },
+				stage_bits: LocationPacked(1, 45, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: false
 			}),
 			parse_subpass_deps; "0 -> 1: ColorAttachmentWrite -> ShaderRead" => Err(ParseError::DelimiterRequired(42)),
 			parse_subpass_deps; "0 -> 1" => Err(ParseError::DelimiterRequired(6))
@@ -1206,22 +1212,22 @@ fn at_token(input: &mut ParseLine) -> bool
 		{
 			parse_rp_attachment; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal <- ColorAttachmentOptimal, PreserveContent" => Ok(RPAttachment
 			{
-				format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), preserve_content: true, clear_on_load: None,
+				format: LocationPacked(1, 0, Format::Value(VkFormat::R8G8B8A8_UNORM)), preserve_content: true, clear_on_load: None,
 				layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 			}),
 			parse_rp_attachment; "R32 SFLOAT, ShaderReadOnlyOptimal <- ColorAttachmentOptimal" => Ok(RPAttachment
 			{
-				format: PixelFormat::Value(VkFormat::R32_SFLOAT), preserve_content: false, clear_on_load: None,
+				format: LocationPacked(1, 0, Format::Value(VkFormat::R32_SFLOAT)), preserve_content: false, clear_on_load: None,
 				layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 			}),
 			parse_rp_attachment; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, ClearOnLoad" => Ok(RPAttachment
 			{
-				format: PixelFormat::Value(VkFormat::R8G8B8A8_UNORM), preserve_content: false, clear_on_load: Some(true),
+				format: LocationPacked(1, 0, Format::Value(VkFormat::R8G8B8A8_UNORM)), preserve_content: false, clear_on_load: Some(true),
 				layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 			}),
 			parse_rp_attachment; "R8G8B8A8 SNORM, ShaderReadOnlyOptimal, LoadContent / PreserveContent" => Ok(RPAttachment
 			{
-				format: PixelFormat::Value(VkFormat::R8G8B8A8_SNORM), preserve_content: true, clear_on_load: Some(false),
+				format: LocationPacked(1, 0, Format::Value(VkFormat::R8G8B8A8_SNORM)), preserve_content: true, clear_on_load: Some(false),
 				layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }	
 			}),
 			parse_rp_attachment; "R8G8B8A8 UNORM" => Err(ParseError::DelimiterRequired(14)),
@@ -1232,11 +1238,14 @@ fn at_token(input: &mut ParseLine) -> bool
 	{
 		Testing!
 		{
-			parse_subpass_desc; "RenderTo 0" => Ok(RPSubpassDesc { color_outs: vec![ConfigInt::Value(0)], inputs: Vec::new() }),
-			parse_subpass_desc; "RenderTo 0 From 1" => Ok(RPSubpassDesc { color_outs: vec![ConfigInt::Value(0)], inputs: vec![ConfigInt::Value(1)] }),
+			parse_subpass_desc; "RenderTo 0"
+				=> Ok(RPSubpassDesc { color_outs: vec![LocationPacked(1, 9, ConfigInt::Value(0))], inputs: Vec::new() }),
+			parse_subpass_desc; "RenderTo 0 From 1"
+				=> Ok(RPSubpassDesc { color_outs: vec![LocationPacked(1, 9, ConfigInt::Value(0))], inputs: vec![LocationPacked(1, 16, ConfigInt::Value(1))] }),
 			parse_subpass_desc; "<- [1, 2] RenderTo [0, 3]" => Ok(RPSubpassDesc
 			{
-				color_outs: vec![ConfigInt::Value(0), ConfigInt::Value(3)], inputs: vec![ConfigInt::Value(1), ConfigInt::Value(2)]
+				color_outs: vec![LocationPacked(1, 20, ConfigInt::Value(0)), LocationPacked(1, 23, ConfigInt::Value(3))],
+				inputs: vec![LocationPacked(1, 4, ConfigInt::Value(1)), LocationPacked(1, 7, ConfigInt::Value(2))]
 			}),
 			parse_subpass_desc; "Preserve 0" => Err(ParseError::CorruptedSubpassDesc(0)),
 			parse_subpass_desc; "RenderTo 0 RenderTo 1" => Err(ParseError::DefinitionOverrided)
@@ -1246,9 +1255,12 @@ fn at_token(input: &mut ParseLine) -> bool
 	{
 		Testing!
 		{
-			parse_extern_resources; "ImageView 1D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 1, refname: "HogeResource".into() }),
-			parse_extern_resources; "ImageView 2D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 2, refname: "HogeResource".into() }),
-			parse_extern_resources; "ImageView 3D \"HogeResource\"" => Ok(ExternalResourceData::ImageView { dim: 3, refname: "HogeResource".into() }),
+			parse_extern_resources; "ImageView 1D \"HogeResource\""
+				=> Ok(ExternalResourceData::ImageView { dim: 1, refname: LocationPacked(1, 13, "HogeResource".into()) }),
+			parse_extern_resources; "ImageView 2D \"HogeResource\""
+				=> Ok(ExternalResourceData::ImageView { dim: 2, refname: LocationPacked(1, 13, "HogeResource".into()) }),
+			parse_extern_resources; "ImageView 3D \"HogeResource\""
+				=> Ok(ExternalResourceData::ImageView { dim: 3, refname: LocationPacked(1, 13, "HogeResource".into()) }),
 			parse_extern_resources; "SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
 			parse_extern_resources; "Framebuffer" => Err(ParseError::UnknownExternalResource(0)),
 			parse_extern_resources; "ImageView \"HogeResource\"" => Err(ParseError::Expected("Image Dimension", 10))
@@ -1258,7 +1270,7 @@ fn at_token(input: &mut ParseLine) -> bool
 	{
 		Testing!
 		{
-			parse_framebuffer_rp; "<$FirstRP>" => Ok(FramebufferRenderPassRef::Int(ConfigInt::Ref("FirstRP".into()))),
+			parse_framebuffer_rp; "<$FirstRP>" => Ok(FramebufferRenderPassRef::Int(LocationPacked(1, 1, ConfigInt::Ref("FirstRP".into())))),
 			parse_framebuffer_rp; "<Presented>" => Ok(FramebufferRenderPassRef::Presented),
 			parse_framebuffer_rp; "n" => Ok(FramebufferRenderPassRef::None),
 			parse_framebuffer_rp; "<0" => Err(ParseError::ClosingRequired(2)),

@@ -22,7 +22,7 @@ impl<T> Transition<T>
 		})
 	}
 }
-impl<T> Transition<T> where T: Copy
+impl<T: Clone> Transition<T>
 {
 	pub fn parse_opt<'s, F>(input: &mut ParseLine<'s>, childparser: F) -> Result<Self, ParseError> where F: Fn(&mut ParseLine<'s>) -> Result<T, ParseError>
 	{
@@ -37,7 +37,7 @@ impl<T> Transition<T> where T: Copy
 			{
 				childparser(input.drop_while(ignore_chars)).map(|b| Transition { to: a, from: b })
 			}
-			else { Ok(Transition { to: a, from: a }) }
+			else { Ok(Transition { to: a.clone(), from: a }) }
 		})
 	}
 }
@@ -54,11 +54,11 @@ impl<T> Transition<T> where T: Copy
 		Testing!
 		{
 			PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex -> Fragment"
-				=> Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_FRAGMENT_BIT }),
+				=> Ok(Transition { from: LocationPacked(1, 0, VK_SHADER_STAGE_VERTEX_BIT), to: LocationPacked(1, 10, VK_SHADER_STAGE_FRAGMENT_BIT) }),
 			PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex"
 				=> Err(ParseError::DirectionRequired(6)),
 			PartialApply1!(Transition::parse_opt; parse_shader_stage_bits); "Vertex"
-				=> Ok(Transition { from: VK_SHADER_STAGE_VERTEX_BIT, to: VK_SHADER_STAGE_VERTEX_BIT })
+				=> Ok(Transition { from: LocationPacked(1, 0, VK_SHADER_STAGE_VERTEX_BIT), to: LocationPacked(1, 0, VK_SHADER_STAGE_VERTEX_BIT) })
 		}
 	}
 }

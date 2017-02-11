@@ -19,22 +19,20 @@ impl ErrorReporter
 }
 
 // Values to ConfigInt conversions
-unsafe trait UnsafeConversion<T> : Sized { unsafe fn uconv(self) -> T; }
-unsafe impl UnsafeConversion<usize> for u32 { unsafe fn uconv(self) -> usize { self as usize } }
-impl ConfigInt
+trait UnsafeConversion<T> : Sized { unsafe fn uconv(self) -> T; }
+impl UnsafeConversion<usize> for u32 { unsafe fn uconv(self) -> usize { self as usize } }
+fn resolve_config_int<F, CV>(config: LocationPacked<ConfigInt>, error: &mut ErrorReporter, resolver: F) -> Option<CV>
+	where F: FnOnce(&str) -> Option<CV>, u32: UnsafeConversion<CV>
 {
-	fn resolve<F, CV>(self, er: &mut ErrorReporter, resolver: F) -> Option<CV>
-		where F: FnOnce(&str) -> Option<CV>, u32: UnsafeConversion<CV>
+	let LocationPacked(line, col, cint) = config;
+	match cint
 	{
-		match self
+		ConfigInt::Ref(ref refn) => if let Some(v) = resolver(refn) { Some(v) } else
 		{
-			ConfigInt::Ref(ref refn) => if let Some(v) = resolver(refn) { Some(v) } else
-			{
-				er.error(format!("Unknown ConfigInt Reference to {}", refn), (0, 0));
-				None
-			},
-			ConfigInt::Value(v) => Some(unsafe { v.uconv() })
-		}
+			error.error(format!("Unknown ConfigInt Reference to {}", refn), (line, col));
+			None
+		},
+		ConfigInt::Value(v) => Some(unsafe { v.uconv() })
 	}
 }
 #[cfg(test)] mod tests
@@ -44,9 +42,9 @@ impl ConfigInt
 	#[test] fn configint_resolver()
 	{
 		let mut er = ErrorReporter::new();
-		assert_eq!(ConfigInt::Ref("testing".into()).resolve(&mut er, |_| Some(0)), Some(0));
-		assert_eq!(ConfigInt::Ref("testing".into()).resolve(&mut er, |_| None), None);
-		assert_eq!(ConfigInt::Value(3).resolve(&mut er, |_| None), Some(3));
+		assert_eq!(resolve_config_int(LocationPacked(1, 0, ConfigInt::Ref("testing".into())), &mut er, |_| Some(0)), Some(0));
+		assert_eq!(resolve_config_int(LocationPacked(1, 0, ConfigInt::Ref("testing".into())), &mut er, |_| None), None);
+		assert_eq!(resolve_config_int(LocationPacked(1, 0, ConfigInt::Value(3)), &mut er, |_| None), Some(3));
 	}
 }
 
@@ -60,15 +58,16 @@ impl RPSubpassDesc
 	{
 		ResolvedRPSubpassDesc
 		{
-			color_outs: self.color_outs.into_iter().map(|ci| ci.resolve(er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect(),
-			inputs: self.inputs.into_iter().map(|ci| ci.resolve(er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect()
+			color_outs: self.color_outs.into_iter().map(|ci| resolve_config_int(ci, er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect(),
+			inputs: self.inputs.into_iter().map(|ci| resolve_config_int(ci, er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect()
 		}
 	}
 }
 
 pub struct ResolvedRPSubpassDeps
 {
-	pub passtrans: Transition<usize>, pub access_mask: Transition<VkAccessFlags>, pub stage_bits: VkPipelineStageFlags, pub by_region: bool
+	pub passtrans: Transition<usize>, pub access_mask: Transition<LocationPacked<VkAccessFlags>>,
+	pub stage_bits: LocationPacked<VkPipelineStageFlags>, pub by_region: bool
 }
 impl RPSubpassDeps
 {
@@ -78,8 +77,8 @@ impl RPSubpassDeps
 		{
 			passtrans: Transition
 			{
-				from: self.passtrans.from.resolve(er, |refn| parent.subpasses.reverse_index(refn)).unwrap_or(0),
-				to: self.passtrans.to.resolve(er, |refn| parent.subpasses.reverse_index(refn)).unwrap_or(0)
+				from: resolve_config_int(self.passtrans.from, er, |refn| parent.subpasses.reverse_index(refn)).unwrap_or(0),
+				to: resolve_config_int(self.passtrans.to, er, |refn| parent.subpasses.reverse_index(refn)).unwrap_or(0)
 			},
 			access_mask: self.access_mask, stage_bits: self.stage_bits, by_region: self.by_region
 		}
@@ -97,13 +96,13 @@ impl PreciseRenderPassRef
 {
 	pub fn resolve(self, parent: &ParsedDeviceResources, er: &mut ErrorReporter) -> PreciseRenderPass
 	{
-		let ox = self.rp.resolve(er, Delegate!(parent.renderpasses => reverse_index)).unwrap_or(0);
+		let ox = resolve_config_int(self.rp, er, Delegate!(parent.renderpasses => reverse_index)).unwrap_or(0);
 		if !er.has_error
 		{
 			let ref o = parent.renderpasses[ox];
 			PreciseRenderPass
 			{
-				obj: ox, subpass: self.subpass.resolve(er, Delegate!(o.subpasses => reverse_index)).unwrap_or(0)
+				obj: ox, subpass: resolve_config_int(self.subpass, er, Delegate!(o.subpasses => reverse_index)).unwrap_or(0)
 			}
 		}
 		else { PreciseRenderPass { obj: 0, subpass: 0 } }
