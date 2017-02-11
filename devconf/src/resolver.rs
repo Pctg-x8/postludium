@@ -19,10 +19,10 @@ impl ErrorReporter
 }
 
 // Values to ConfigInt conversions
-trait UnsafeConversion<T> : Sized { unsafe fn uconv(self) -> T; }
-impl UnsafeConversion<usize> for u32 { unsafe fn uconv(self) -> usize { self as usize } }
+trait ScalarConversion<T> : Sized { fn sconv(self) -> T; }
+impl ScalarConversion<usize> for u32 { fn sconv(self) -> usize { self as usize } }
 fn resolve_config_int<F, CV>(config: LocationPacked<ConfigInt>, error: &mut ErrorReporter, resolver: F) -> Option<CV>
-	where F: FnOnce(&str) -> Option<CV>, u32: UnsafeConversion<CV>
+	where F: FnOnce(&str) -> Option<CV>, u32: ScalarConversion<CV>
 {
 	let LocationPacked(line, col, cint) = config;
 	match cint
@@ -32,7 +32,7 @@ fn resolve_config_int<F, CV>(config: LocationPacked<ConfigInt>, error: &mut Erro
 			error.error(format!("Unknown ConfigInt Reference to {}", refn), (line, col));
 			None
 		},
-		ConfigInt::Value(v) => Some(unsafe { v.uconv() })
+		ConfigInt::Value(v) => Some(v.sconv())
 	}
 }
 #[cfg(test)] mod tests
