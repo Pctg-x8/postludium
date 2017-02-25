@@ -106,10 +106,10 @@ fn not_ignored(c: char) -> bool { !is_ignored(c) }
 
 pub fn parse_image_format(args: &mut ParseLine, screen_format: VkFormat) -> DevConfParsingResult<VkFormat>
 {
-	match devconf::PixelFormat::parse(args)
+	match devconf::Format::parse(args)
 	{
-		Ok(devconf::PixelFormat::Value(v)) => DevConfParsingResult::Ok(v),
-		Ok(devconf::PixelFormat::Ref(ref v)) if v == "ScreenFormat" => DevConfParsingResult::Ok(screen_format),
+		Ok(devconf::LocationPacked(_, _, devconf::Format::Value(v))) => DevConfParsingResult::Ok(v),
+		Ok(devconf::LocationPacked(_, _, devconf::Format::Ref(ref v))) if v == "ScreenFormat" => DevConfParsingResult::Ok(screen_format),
 		_ => DevConfParsingResult::InvalidFormatError
 	}
 }
@@ -246,7 +246,7 @@ pub fn parse_configuration_image(lines_iter: &mut LazyLines, screen_size: &Size2
 	let (headline, dim) =
 	{
 		let (headline, conf_head) = lines_iter.pop().unwrap();
-		let mut conf_head = ParseLine(conf_head, 0);
+		let mut conf_head = ParseLine::wrap(conf_head, 0, headline);
 		assert!(conf_head.starts_with(&"Image".chars().collect_vec()));
 		let dim_str = conf_head.drop_opt(5).drop_while(is_ignored).take_until(is_ignored).clone_as_string();
 		let dim = match dim_str.as_ref()
@@ -340,35 +340,35 @@ mod test
 
 	#[test] fn parse_image_formats()
 	{
-		assert_eq!(parse_image_format(&mut ParseLine(&"R8G8B8A8 UNORM".chars().collect_vec(), 0), VkFormat::R8G8B8A8_SRGB).unwrap(), VkFormat::R8G8B8A8_UNORM);
-		assert_eq!(parse_image_format(&mut ParseLine(&"$ScreenFormat".chars().collect_vec(), 0), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
-		assert_eq!(parse_image_format(&mut ParseLine(&"$ScreenFormat SFLOAT".chars().collect_vec(), 0), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
-		assert!(parse_image_format(&mut ParseLine(&"R8G8B8A8 SFLOAT".chars().collect_vec(), 0), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
-		assert!(parse_image_format(&mut ParseLine(&"aaa TEST".chars().collect_vec(), 0), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
+		assert_eq!(parse_image_format(&mut ParseLine::wrap(&"R8G8B8A8 UNORM".chars().collect_vec(), 0, 1), VkFormat::R8G8B8A8_SRGB).unwrap(), VkFormat::R8G8B8A8_UNORM);
+		assert_eq!(parse_image_format(&mut ParseLine::wrap(&"$ScreenFormat".chars().collect_vec(), 0, 1), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
+		assert_eq!(parse_image_format(&mut ParseLine::wrap(&"$ScreenFormat SFLOAT".chars().collect_vec(), 0, 1), VkFormat::R16G16B16A16_UNORM).unwrap(), VkFormat::R16G16B16A16_UNORM);
+		assert!(parse_image_format(&mut ParseLine::wrap(&"R8G8B8A8 SFLOAT".chars().collect_vec(), 0, 1), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
+		assert!(parse_image_format(&mut ParseLine::wrap(&"aaa TEST".chars().collect_vec(), 0, 1), VkFormat::R8G8B8A8_SRGB).is_invalid_format_err());
 	}
 	#[test] fn parse_image_usage()
 	{
-		assert_eq!(parse_image_usage_flags(&mut ParseLine(&"Sampled / DeviceLocal".chars().collect_vec(), 0), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
-		assert_eq!(parse_image_usage_flags(&mut ParseLine(&"Sampled /DeviceLocal".chars().collect_vec(), 0), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
-		assert_eq!(parse_image_usage_flags(&mut ParseLine(&"Sampled".chars().collect_vec(), 0), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, false));
-		assert!(parse_image_usage_flags(&mut ParseLine(&"AsColorTexture/".chars().collect_vec(), 0), 0, false).is_invalid_usage_flag_err());
+		assert_eq!(parse_image_usage_flags(&mut ParseLine::wrap(&"Sampled / DeviceLocal".chars().collect_vec(), 0, 1), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
+		assert_eq!(parse_image_usage_flags(&mut ParseLine::wrap(&"Sampled /DeviceLocal".chars().collect_vec(), 0, 1), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, true));
+		assert_eq!(parse_image_usage_flags(&mut ParseLine::wrap(&"Sampled".chars().collect_vec(), 0, 1), 0, false).unwrap(), (VK_IMAGE_USAGE_SAMPLED_BIT, false));
+		assert!(parse_image_usage_flags(&mut ParseLine::wrap(&"AsColorTexture/".chars().collect_vec(), 0, 1), 0, false).is_invalid_usage_flag_err());
 	}
 	#[test] fn parse_image_extents()
 	{
-		assert_eq!(parse_image_extent(&mut ParseLine(&"640".chars().collect_vec(), 0), ImageDimensions::Single, &Size2(1920, 1080)).unwrap(), Size3(640, 1, 1));
-		assert_eq!(parse_image_extent(&mut ParseLine(&"640 480".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 1));
-		assert_eq!(parse_image_extent(&mut ParseLine(&"640 480 16".chars().collect_vec(), 0), ImageDimensions::Triple, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 16));
-		assert_eq!(parse_image_extent(&mut ParseLine(&"$ScreenWidth $ScreenHeight".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(1920, 1080, 1));
-		assert_eq!(parse_image_extent(&mut ParseLine(&"640 $ScreenHeight".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 1080, 1));
-		assert!(parse_image_extent(&mut ParseLine(&"$screenwidth $screenHeight".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
-		assert!(parse_image_extent(&mut ParseLine(&"$screenwidth aaa".chars().collect_vec(), 0), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
+		assert_eq!(parse_image_extent(&mut ParseLine::wrap(&"640".chars().collect_vec(), 0, 1), ImageDimensions::Single, &Size2(1920, 1080)).unwrap(), Size3(640, 1, 1));
+		assert_eq!(parse_image_extent(&mut ParseLine::wrap(&"640 480".chars().collect_vec(), 0, 1), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 1));
+		assert_eq!(parse_image_extent(&mut ParseLine::wrap(&"640 480 16".chars().collect_vec(), 0, 1), ImageDimensions::Triple, &Size2(1920, 1080)).unwrap(), Size3(640, 480, 16));
+		assert_eq!(parse_image_extent(&mut ParseLine::wrap(&"$ScreenWidth $ScreenHeight".chars().collect_vec(), 0, 1), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(1920, 1080, 1));
+		assert_eq!(parse_image_extent(&mut ParseLine::wrap(&"640 $ScreenHeight".chars().collect_vec(), 0, 1), ImageDimensions::Double, &Size2(1920, 1080)).unwrap(), Size3(640, 1080, 1));
+		assert!(parse_image_extent(&mut ParseLine::wrap(&"$screenwidth $screenHeight".chars().collect_vec(), 0, 1), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
+		assert!(parse_image_extent(&mut ParseLine::wrap(&"$screenwidth aaa".chars().collect_vec(), 0, 1), ImageDimensions::Double, &Size2(1920, 1080)).is_numeric_parsing_failed());
 	}
 	#[test] fn parse_filter_types()
 	{
-		assert_eq!(parse_filter_type(&mut ParseLine(&"Nearest ".chars().collect_vec(), 0)).unwrap(), (Filter::Nearest, Filter::Nearest));
-		assert_eq!(parse_filter_type(&mut ParseLine(&"Linear".chars().collect_vec(), 0)).unwrap(), (Filter::Linear, Filter::Linear));
-		assert_eq!(parse_filter_type(&mut ParseLine(&"Linear Nearest".chars().collect_vec(), 0)).unwrap(), (Filter::Linear, Filter::Nearest));
-		assert!(parse_filter_type(&mut ParseLine(&"Bilinear".chars().collect_vec(), 0)).is_invalid_filter_type_err());
+		assert_eq!(parse_filter_type(&mut ParseLine::wrap(&"Nearest ".chars().collect_vec(), 0, 1)).unwrap(), (Filter::Nearest, Filter::Nearest));
+		assert_eq!(parse_filter_type(&mut ParseLine::wrap(&"Linear".chars().collect_vec(), 0, 1)).unwrap(), (Filter::Linear, Filter::Linear));
+		assert_eq!(parse_filter_type(&mut ParseLine::wrap(&"Linear Nearest".chars().collect_vec(), 0, 1)).unwrap(), (Filter::Linear, Filter::Nearest));
+		assert!(parse_filter_type(&mut ParseLine::wrap(&"Bilinear".chars().collect_vec(), 0, 1)).is_invalid_filter_type_err());
 	}
 	#[test] fn parse_image_conf()
 	{
