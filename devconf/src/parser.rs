@@ -61,7 +61,8 @@ pub struct ParsedDeviceResources
 	pub descriptor_sets: NamedContents<DescriptorSetsInfo>,
 	pub pipeline_states: NamedContents<PipelineStateInfo>,
 	pub externs: NamedContents<ExternalResourceData>,
-	pub framebuffers: NamedContents<FramebufferInfo>
+	pub framebuffers: NamedContents<FramebufferInfo>,
+	pub ind_shaders: NamedContents<IndependentPipelineShaderStageInfo>
 }
 #[derive(Debug, PartialEq)]
 pub struct ImageDescription
@@ -123,6 +124,11 @@ pub struct PipelineShaderStageInfo
 	asset: LocationPacked<AssetResource>, consts: HashMap<u32, LocationPacked<NumericLiteral>>
 }
 #[derive(Debug, PartialEq)]
+pub struct IndependentPipelineShaderStageInfo
+{
+	stage: VkShaderStageFlags, asset: LocationPacked<AssetResource>, consts: HashMap<u32, LocationPacked<NumericLiteral>>
+}
+#[derive(Debug, PartialEq)]
 pub struct PipelineStateInfo
 {
 	renderpass: PreciseRenderPassRef, layout_ref: LocationPacked<ConfigInt>,
@@ -152,7 +158,7 @@ impl ParsedDeviceResources
 			renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
 			descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
 			pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
-			externs: NamedContents::new(), framebuffers: NamedContents::new()
+			externs: NamedContents::new(), framebuffers: NamedContents::new(), ind_shaders: NamedContents::new()
 		}
 	}
 }
@@ -223,7 +229,7 @@ pub trait FromSourceBlock : Sized
 {
 	fn parse(enterline: &mut ParseLine, lines: &mut LazyLines) -> Self;
 }
-/// The array that can be constructed with some of structures, returns error when it is found.
+/// The array that can be constructed with some structures, returns error when it is found.
 pub trait FromSourceArray : FromSource
 {
 	fn array_name() -> Cow<'static, str> { format!("Array of {}", Self::object_name()).into() }
@@ -442,6 +448,36 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut Lazy
 			{
 				let p = FramebufferInfo::parse(source.drop_while(ignore_chars), lines);
 				if let Some(name) = name { sink.framebuffers.insert(name.into(), p); } else { sink.framebuffers.insert_unnamed(p); }
+			},
+			"VertexShader" =>
+			{
+				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
+				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_VERTEX_BIT, asset: asset, consts: consts };
+				if let Some(name) = name { sink.ind_shaders.insert(name.into(), ss); } else { sink.ind_shaders.insert_unnamed(ss); }
+			},
+			"FragmentShader" =>
+			{
+				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
+				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_FRAGMENT_BIT, asset: asset, consts: consts };
+				if let Some(name) = name { sink.ind_shaders.insert(name.into(), ss); } else { sink.ind_shaders.insert_unnamed(ss); }
+			},
+			"GeometryShader" =>
+			{
+				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
+				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_GEOMETRY_BIT, asset: asset, consts: consts };
+				if let Some(name) = name { sink.ind_shaders.insert(name.into(), ss); } else { sink.ind_shaders.insert_unnamed(ss); }
+			},
+			"TessellationControlShader" | "TessControlShader" =>
+			{
+				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
+				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, asset: asset, consts: consts };
+				if let Some(name) = name { sink.ind_shaders.insert(name.into(), ss); } else { sink.ind_shaders.insert_unnamed(ss); }
+			},
+			"TessellationEvaluationShader" | "TessEvaluationShader" =>
+			{
+				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
+				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, asset: asset, consts: consts };
+				if let Some(name) = name { sink.ind_shaders.insert(name.into(), ss); } else { sink.ind_shaders.insert_unnamed(ss); }
 			},
 			_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(source.line())
 		};
@@ -966,10 +1002,17 @@ impl FromSourceBlock for PipelineShaderStageInfo
 {
 	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
 	{
+		Self::parse_baseindent(enterline, source, 1)
+	}
+}
+impl PipelineShaderStageInfo
+{
+	fn parse_baseindent(enterline: &mut ParseLine, source: &mut LazyLines, baseindent: usize) -> Self
+	{
 		let asset = AssetResource::parse(enterline).report_error(enterline.line());
 
 		let mut consts = HashMap::new();
-		while let Some(mut s) = acquire_line(source, 2)
+		while let Some(mut s) = acquire_line(source, baseindent + 1)
 		{
 			if s.starts_with(&['C', 'o', 'n', 's', 't', 'a', 'n', 't'])
 			{
