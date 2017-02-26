@@ -36,6 +36,11 @@ impl<T: Debug + PartialEq> Deref for LocationPacked<T>
 }
 pub type LocatedParseResult<T> = Result<LocationPacked<T>, ParseError>;
 pub fn location_pack<T: Debug + PartialEq>(value: T, line: usize, col: usize) -> LocatedParseResult<T> { Ok(LocationPacked(line, col, value)) }
+/// The structure that can be constructed by source with its location, returns error when it is found.
+pub trait FromSourceLocated : Sized + PartialEq + Debug
+{
+	fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>;
+}
 
 // Integer Literal or $~~
 #[derive(Debug, PartialEq)]
@@ -106,7 +111,7 @@ impl NumericLiteral
 		let s =
 		{
 			let ipart = input.take_while(|c| c.is_digit(10));
-			if ipart.is_empty() { Err(ParseError::Expected("Numerical Value", ipart.current())) }
+			if ipart.is_empty() { Err(ParseError::Expected("Numerical Value".into(), ipart.current())) }
 			else if input.front() == Some('.')
 			{
 				let fpart = input.drop_opt(1).take_while(|c| c.is_digit(10));
@@ -141,9 +146,9 @@ impl NumericLiteral
 }
 #[derive(Debug, PartialEq)]
 pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
-impl AssetResource
+impl FromSourceLocated for AssetResource
 {
-	pub fn parse(input: &mut ParseLine) -> LocatedParseResult<Self>
+	fn parse(input: &mut ParseLine) -> LocatedParseResult<Self>
 	{
 		if input.front() == Some('!')
 		{
@@ -158,7 +163,7 @@ impl AssetResource
 					nv.push(s.clone_as_string()); if input.front() == Some('.') { input.drop_opt(1); } else { break; }
 				}
 			}
-			if nv.is_empty() { Err(ParseError::Expected("Asset Path", input.current())) }
+			if nv.is_empty() { Err(ParseError::Expected("Asset Path".into(), input.current())) }
 			else { location_pack(AssetResource::PathRef(nv), input.line(), inloc) }
 		}
 		else { ConfigInt::parse(input).map(PartialApply1!(LocationPacked::rewrap; AssetResource::IntRef)) }
@@ -181,14 +186,14 @@ pub fn parse_usize_range(source: &mut ParseLine) -> LocatedParseResult<Range<usi
 				en.map_err(|ee| ParseError::NumericParseError(ee, e.current())).map(|en| LocationPacked(s.line(), s.current(), sn .. en)))
 		}
 	}
-	else { Err(ParseError::Expected("Bytesize Range", source.current())) }
+	else { Err(ParseError::Expected("Bytesize Range".into(), source.current())) }
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Format { Ref(String), Value(VkFormat) }
-impl Format
+impl FromSourceLocated for Format
 {
-	pub fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>
+	fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>
 	{
 		if source.front() == Some('$')
 		{
@@ -344,37 +349,40 @@ pub fn parse_shader_stage_bits(source: &mut ParseLine) -> LocatedParseResult<VkS
 	let startloc = source.current();
 	recursive(source, 0).map(|f| LocationPacked(source.line(), startloc, f))
 }
-pub fn parse_string_literal(source: &mut ParseLine) -> LocatedParseResult<String>
+impl FromSourceLocated for String
 {
-	fn recursive_char<'s>(input: &mut ParseLine<'s>, sink: &mut String) -> Result<(), ParseError>
+	fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>
 	{
-		match input.front()
+		fn recursive_char<'s>(input: &mut ParseLine<'s>, sink: &mut String) -> Result<(), ParseError>
 		{
-			Some('\\') => recursive_escape(input.drop_opt(1), sink),
-			Some('"') => { input.drop_opt(1); Ok(()) },
-			Some(c) => { sink.push(c); recursive_char(input.drop_one(), sink) },
-			None => Err(ParseError::ClosingRequired(input.current()))
+			match input.front()
+			{
+				Some('\\') => recursive_escape(input.drop_opt(1), sink),
+				Some('"') => { input.drop_opt(1); Ok(()) },
+				Some(c) => { sink.push(c); recursive_char(input.drop_one(), sink) },
+				None => Err(ParseError::ClosingRequired(input.current()))
+			}
 		}
-	}
-	fn recursive_escape<'s>(input: &mut ParseLine<'s>, sink: &mut String) -> Result<(), ParseError>
-	{
-		match input.front()
+		fn recursive_escape<'s>(input: &mut ParseLine<'s>, sink: &mut String) -> Result<(), ParseError>
 		{
-			Some('t') => { sink.push('\t'); recursive_char(input.drop_opt(1), sink) },
-			Some('n') => { sink.push('\n'); recursive_char(input.drop_opt(1), sink) },
-			Some('r') => { sink.push('\r'); recursive_char(input.drop_opt(1), sink) },
-			Some(c) => { sink.push(c); recursive_char(input.drop_opt(1), sink) },
-			None => Err(ParseError::ClosingRequired(input.current()))
+			match input.front()
+			{
+				Some('t') => { sink.push('\t'); recursive_char(input.drop_opt(1), sink) },
+				Some('n') => { sink.push('\n'); recursive_char(input.drop_opt(1), sink) },
+				Some('r') => { sink.push('\r'); recursive_char(input.drop_opt(1), sink) },
+				Some(c) => { sink.push(c); recursive_char(input.drop_opt(1), sink) },
+				None => Err(ParseError::ClosingRequired(input.current()))
+			}
 		}
-	}
 
-	if source.front() == Some('"')
-	{
-		let startloc = source.current();
-		let mut buf = String::new();
-		recursive_char(source.drop_opt(1), &mut buf).map(|_| LocationPacked(source.line(), startloc, buf))
+		if source.front() == Some('"')
+		{
+			let startloc = source.current();
+			let mut buf = String::new();
+			recursive_char(source.drop_opt(1), &mut buf).map(|_| LocationPacked(source.line(), startloc, buf))
+		}
+		else { Err(ParseError::Expected("String Literal".into(), source.current())) }
 	}
-	else { Err(ParseError::Expected("String Literal", source.current())) }
 }
 
 #[cfg(test)] #[macro_use] mod tests
@@ -424,7 +432,7 @@ pub fn parse_string_literal(source: &mut ParseLine) -> LocatedParseResult<String
 			PartialApply1!(NumericLiteral::parse; true); "10f" => Ok(LocationPacked(1, 0, NumericLiteral::Floating32(10.0))),
 			PartialApply1!(NumericLiteral::parse; false); "10f32" => Ok(LocationPacked(1, 0, NumericLiteral::Floating32(10.0))),
 			PartialApply1!(NumericLiteral::parse; true); "10f64" => Ok(LocationPacked(1, 0, NumericLiteral::Floating(10.0))),
-			PartialApply1!(NumericLiteral::parse; false); "" => Err(ParseError::Expected("Numerical Value", 0))
+			PartialApply1!(NumericLiteral::parse; false); "" => Err(ParseError::Expected("Numerical Value".into(), 0))
 		}
 	}
 	#[test] fn parse_asset_resource()
@@ -433,7 +441,7 @@ pub fn parse_string_literal(source: &mut ParseLine) -> LocatedParseResult<String
 		{
 			AssetResource::parse; "!shaders.PureF" => Ok(LocationPacked(1, 0, AssetResource::PathRef(vec!["shaders".into(), "PureF".into()]))),
 			AssetResource::parse; "$en" => Ok(LocationPacked(1, 0, AssetResource::IntRef(ConfigInt::Ref("en".into())))),
-			AssetResource::parse; "!" => Err(ParseError::Expected("Asset Path", 1)),
+			AssetResource::parse; "!" => Err(ParseError::Expected("Asset Path".into(), 1)),
 			AssetResource::parse; "~" => Err(ParseError::IntValueRequired(0))
 		}
 	}
@@ -443,7 +451,7 @@ pub fn parse_string_literal(source: &mut ParseLine) -> LocatedParseResult<String
 		{
 			parse_usize_range; "0 .. 16" => Ok(LocationPacked(1, 0, 0usize .. 16usize)),
 			parse_usize_range; "n .. m" => Err(ParseError::BytesizeRequired(0)),
-			parse_usize_range; "4" => Err(ParseError::Expected("Bytesize Range", 1)),
+			parse_usize_range; "4" => Err(ParseError::Expected("Bytesize Range".into(), 1)),
 			parse_usize_range; "4 ..n" => Err(ParseError::BytesizeRequired(4))
 		}
 	}
@@ -498,9 +506,9 @@ pub fn parse_string_literal(source: &mut ParseLine) -> LocatedParseResult<String
 	{
 		Testing!
 		{
-			parse_string_literal; "\"HogeResource\"" => Ok(LocationPacked(1, 0, "HogeResource".into())),
-			parse_string_literal; "\"HogeResource" => Err(ParseError::ClosingRequired(13)),
-			parse_string_literal; "A" => Err(ParseError::Expected("String Literal", 0))
+			String::parse; "\"HogeResource\"" => Ok(LocationPacked(1, 0, "HogeResource".into())),
+			String::parse; "\"HogeResource" => Err(ParseError::ClosingRequired(13)),
+			String::parse; "A" => Err(ParseError::Expected("String Literal".into(), 0))
 		}
 	}
 }
