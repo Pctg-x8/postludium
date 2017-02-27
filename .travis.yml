@@ -1,7 +1,0 @@
-language: rust
-rust: stable
-cache: cargo
-
-script:
-  - cd parsetools && cargo test --verbose
-  - cd ../devconf && cargo test --verbose
