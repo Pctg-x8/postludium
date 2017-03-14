@@ -1,7 +1,7 @@
 
 use super::ParseError;
 use parsetools::*;
-use vk::*;
+use interlude::ffi::*;
 use super::{ignore_chars, ident_break};
 use std::ops::{Range, Deref};
 use std::fmt::Debug;

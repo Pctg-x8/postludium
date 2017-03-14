@@ -1,7 +1,7 @@
 // Resolving ConfigInt to contextual integer values
 
 use super::*;
-use vk::*;
+use interlude::ffi::*;
 use std;
 
 pub struct ErrorReporter { has_error: bool }

@@ -5,7 +5,7 @@ use std::num::{ParseIntError, ParseFloatError};
 use std::collections::HashMap;
 use parsetools::*;
 use std::borrow::Cow;
-use vk::*;
+use interlude::ffi::*;
 use std::path::PathBuf;
 
 pub use items::*;
