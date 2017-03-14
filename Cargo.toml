@@ -12,4 +12,4 @@ itertools = "0.5.2"
 # child crates
 parsetools = { path = "parsetools" }
 devconf = { path = "devconf" }
-interlude = { path = "../interlude" }
+interlude = { path = "./interlude" }
