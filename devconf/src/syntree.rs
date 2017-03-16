@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use interlude::ffi::*;
+use interlude::*;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum OperationResult { Success, Failed }
@@ -196,4 +197,6 @@ pub struct PipelineStateInfo
 #[derive(Debug, PartialEq)]
 pub enum ViewportScissorEntry { ScreenView, Custom(VkViewport, VkRect2D) }
 #[derive(Debug, PartialEq)]
-pub enum AttachmentBlendState { Disabled, Alpha, PremultipliedAlpha }
+pub struct VertexAttributeInfo { binding: u32, format: LocationPacked<Format>, offset: u32 }
+#[derive(Debug, PartialEq)]
+pub enum VertexBindingRegistry { PerVertex(Option<u32>), PerInstance(Option<u32>), Empty }

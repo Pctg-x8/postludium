@@ -1,5 +1,6 @@
 //! Postludium: Device Configuration Processor: Parser
 
+use std;
 use std::ops::{Index, Deref, Range};
 use std::num::{ParseIntError, ParseFloatError};
 use std::collections::HashMap;
@@ -7,6 +8,7 @@ use parsetools::*;
 use std::borrow::Cow;
 use interlude::ffi::*;
 use std::path::PathBuf;
+use interlude::*;
 
 pub use items::*;
 pub use hobjects::*;
@@ -15,10 +17,6 @@ use syntree::*;
 
 // Misc
 #[derive(Debug, PartialEq)]
-struct Size3F(f32, f32, f32);
-#[derive(Debug, PartialEq)]
-struct Offset2(i32, i32);
-#[derive(Debug, PartialEq)]
 enum FramebufferRenderPassRef { Int(LocationPacked<ConfigInt>), Presented, None }
 impl ParsedDeviceResources
 {
@@ -26,7 +24,6 @@ impl ParsedDeviceResources
 	{
 		ParsedDeviceResources
 		{
-			includes: Vec::new(),
 			renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
 			descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
 			pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
@@ -46,7 +43,7 @@ pub enum ParseError
 	UnknownPipelineStageFlag(usize), UnknownAccessFlag(usize), Expected(Cow<'static, str>, usize), UnknownConfig(&'static str), ConfigRequired(&'static str),
 	UnknownExternalResource(usize), UnknownClearMode(usize), FormatRequired(usize), UnknownObjectRef(&'static str, usize), UnknownShaderStageFlag(usize),
 	UnknownDescriptorKind(usize), BytesizeRequired(usize), UnknownPrimitiveTopology(bool, usize),
-	NameNotAllowed(usize)
+	NameNotAllowed(usize), VertexBindingIntegrityCheckingFailure(u32)
 }
 trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
 impl<T> DivergenceExt<T> for Result<T, ParseError>
@@ -84,7 +81,8 @@ impl<T> DivergenceExt<T> for Result<T, ParseError>
 			Err(ParseError::Expected(s, p)) => panic!("Expected {}, but it was not found at line {}, col {}", s, line, p),
 			Err(ParseError::UnknownConfig(s)) => panic!("Unknown Config for {} was found at line {}", s, line),
 			Err(ParseError::ConfigRequired(c)) => panic!("Configuration \"{}\" required at line {}", c, line),
-			Err(ParseError::NameNotAllowed(p)) => panic!("Naming not allowed for the configuration at line {}, col {}", line, p)
+			Err(ParseError::NameNotAllowed(p)) => panic!("Naming not allowed for the configuration at line {}, col {}", line, p),
+			Err(ParseError::VertexBindingIntegrityCheckingFailure(bi)) => panic!("Vertex Binding #{} (at line {}) is declared more than once and parser could not confirm the integrity.")
 		}
 	}
 }
@@ -194,8 +192,8 @@ impl FromSource for AttachmentBlendState
 		PartialEqualityMatchMap!(s;
 		{
 			DISABLED[..] => Ok(AttachmentBlendState::Disabled),
-			ALPHA[..] => Ok(AttachmentBlendState::Alpha),
-			PREMULTIPLIEDALPHA[..] => Ok(AttachmentBlendState::PremultipliedAlpha);
+			ALPHA[..] => Ok(AttachmentBlendState::AlphaBlend),
+			PREMULTIPLIEDALPHA[..] => Ok(AttachmentBlendState::PremultipliedAlphaBlend);
 			_ => Err(ParseError::Expected(Self::object_name(), s.current()))
 		})
 	}
@@ -229,6 +227,16 @@ impl FromSource for i32
 		x.clone_as_string().parse::<i32>().map_err(|e| ParseError::NumericParseError(e, x.current())).map(|e| if inv { -e } else { e })
 	}
 }
+impl FromSource for u32
+{
+	fn object_name() -> Cow<'static, str> { "u32".into() }
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		let x = source.take_while(|c| c.is_digit(10));
+		if x.is_empty() { Err(ParseError::IntValueRequired(x.current())) }
+		else { x.clone_as_string().parse::<u32>().map_err(|e| ParseError::NumericParseError(e, x.current())) }
+	}
+}
 impl FromSource for Size3F
 {
 	fn object_name() -> Cow<'static, str> { "Size3F".into() }
@@ -259,7 +267,7 @@ impl FromSource for Offset2
 	}
 }
 
-pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut LazyLines)
+pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut Vec<LocationPacked<PathBuf>>, lines: &mut LazyLines)
 {
 	while let Some(mut source) = acquire_line(lines, 0)
 	{
@@ -270,7 +278,7 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut Lazy
 		{
 			// Include <StringLiteral>
 			"Include" => String::parse(source.drop_while(ignore_chars)).map(PartialApply1!(LocationPacked::rewrap; From::from))
-				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(sink.includes.push(p)) }).report_error(source.line()),
+				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(includes.push(p)) }).report_error(source.line()),
 			"RenderPass" =>
 			{
 				let p = RenderPassData::parse(&mut source, lines);
@@ -845,7 +853,7 @@ impl FromSourceBlock for PipelineStateInfo
 			acquire_config_name(&mut s).and_then(|name| match name.clone_as_string().as_ref()
 			{
 				"VertexShader" =>
-					assign_check_overriding(&mut vsinfo, PipelineShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
+					assign_check_overriding(&mut vsinfo, PipelineShaderStageInfoVertex::parse(s.drop_while(ignore_chars), source)),
 				"FragmentShader" =>
 					assign_check_overriding(&mut shaderinfo.fragment, PipelineShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
 				"GeometryShader" =>
@@ -907,6 +915,163 @@ impl PipelineShaderStageInfo
 			else { Err(ParseError::UnknownConfig("Shader Module")) }.report_error(s.line());
 		}
 		PipelineShaderStageInfo { asset: asset, consts: consts }
+	}
+}
+impl FromSourceBlock for PipelineShaderStageInfoVertex
+{
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self { Self::parse_baseindent(enterline, source, 1) }
+}
+impl PipelineShaderStageInfoVertex
+{
+	fn parse_baseindent(enterline: &mut ParseLine, source: &mut LazyLines, baseindent: usize) -> Self
+	{
+		use std::collections::hash_map::Entry;
+		let asset = AssetResource::parse(enterline).report_error(enterline.line());
+
+		let mut consts = HashMap::new();
+		let (mut vb_registry, mut max_binding) = (HashMap::new(), 0);
+		let mut valist = Vec::new();
+		while let Some(mut s) = acquire_line(source, baseindent + 1)
+		{
+			if s.starts_with(&['P', 'e', 'r', 'I', 'n', 's', 't', 'a', 'n', 'c', 'e']) || s.front() == Some('i')
+			{
+				let stride_opt = if if s.front() == Some('i') { s.drop_opt(1) } else { s.drop_opt(11) }.drop_while(ignore_chars).front() == Some('(')
+				{
+					// Structure Stride
+					u32::parse(s.drop_opt(1).drop_while(ignore_chars)).and_then(|n|
+						if s.drop_while(ignore_chars).front() == Some(')') { s.drop_opt(1); Ok(Some(n)) } else { Err(ParseError::ClosingRequired(s.current())) })
+				}
+				else { Ok(None) };
+
+				stride_opt.and_then(|stride_opt|
+				{
+					u32::parse(s.drop_while(ignore_chars)).and_then(|bindex| if s.drop_while(ignore_chars).front() == Some(':')
+					{
+						Format::parse(s.drop_opt(1).drop_while(ignore_chars)).map(|form| (bindex, form))
+					} else { Err(ParseError::DelimiterRequired(s.current())) }).and_then(|(bindex, form)| if s.drop_while(ignore_chars).front() == Some('(')
+					{
+						u32::parse(s.drop_opt(1).drop_while(ignore_chars)).and_then(|offs|
+							if s.drop_while(ignore_chars).front() == Some(')') { s.drop_opt(1); Ok((stride_opt, bindex, form, offs)) }
+							else { Err(ParseError::ClosingRequired(s.current())) }
+						)
+					} else { Err(ParseError::Expected("Offset Bytes".into(), s.current())) })
+				}).and_then(|(stride_opt, bindex, form, offs)|
+				{
+					max_binding = std::cmp::max(max_binding, bindex);
+					match vb_registry.entry(bindex)
+					{
+						Entry::Vacant(v) => { v.insert(VertexBindingRegistry::PerInstance(stride_opt)); Ok(()) },
+						Entry::Occupied(mut o) => match o.get_mut()
+						{
+							&mut VertexBindingRegistry::PerInstance(ref mut st) => if (*st == None && stride_opt != None) || *st == stride_opt
+							{
+								*st = stride_opt;
+								Ok(())
+							}
+							else
+							{
+								Err(ParseError::VertexBindingIntegrityCheckingFailure(bindex))
+							},
+							&mut VertexBindingRegistry::PerVertex(_) => Err(ParseError::VertexBindingIntegrityCheckingFailure(bindex)),
+							_ => unreachable!()
+						}
+					}.and_then(|_| Ok(valist.push(VertexAttributeInfo { binding: bindex, format: form, offset: offs })))
+				})
+			}
+			else if s.starts_with(&['P', 'e', 'r', 'V', 'e', 'r', 't', 'e', 'x']) || s.front() == Some('v')
+			{
+				let stride_opt = if if s.front() == Some('v') { s.drop_opt(1) } else { s.drop_opt(9) }.drop_while(ignore_chars).front() == Some('(')
+				{
+					// Structure Stride
+					u32::parse(s.drop_opt(1).drop_while(ignore_chars)).and_then(|n|
+						if s.drop_while(ignore_chars).front() == Some(')') { s.drop_opt(1); Ok(Some(n)) } else { Err(ParseError::ClosingRequired(s.current())) })
+				}
+				else { Ok(None) };
+
+				stride_opt.and_then(|stride_opt|
+				{
+					u32::parse(s.drop_while(ignore_chars)).and_then(|bindex| if s.drop_while(ignore_chars).front() == Some(':')
+					{
+						Format::parse(s.drop_opt(1).drop_while(ignore_chars)).map(|form| (bindex, form))
+					} else { Err(ParseError::DelimiterRequired(s.current())) }).and_then(|(bindex, form)| if s.drop_while(ignore_chars).front() == Some('(')
+					{
+						u32::parse(s.drop_opt(1).drop_while(ignore_chars)).and_then(|offs|
+							if s.drop_while(ignore_chars).front() == Some(')') { s.drop_opt(1); Ok((stride_opt, bindex, form, offs)) }
+							else { Err(ParseError::ClosingRequired(s.current())) }
+						)
+					} else { Err(ParseError::Expected("Offset Bytes".into(), s.current())) })
+				}).and_then(|(stride_opt, bindex, form, offs)|
+				{
+					max_binding = std::cmp::max(max_binding, bindex);
+					match vb_registry.entry(bindex)
+					{
+						Entry::Vacant(v) => { v.insert(VertexBindingRegistry::PerVertex(stride_opt)); Ok(()) },
+						Entry::Occupied(mut o) => match o.get_mut()
+						{
+							&mut VertexBindingRegistry::PerVertex(ref mut st) => if (*st == None && stride_opt != None) || *st == stride_opt
+							{
+								*st = stride_opt;
+								Ok(())
+							}
+							else
+							{
+								Err(ParseError::VertexBindingIntegrityCheckingFailure(bindex))
+							},
+							&mut VertexBindingRegistry::PerInstance(_) => Err(ParseError::VertexBindingIntegrityCheckingFailure(bindex)),
+							_ => unreachable!()
+						}
+					}.and_then(|_| Ok(valist.push(VertexAttributeInfo { binding: bindex, format: form, offset: offs })))
+				})
+			}
+			else if let Some('0' ... '9') = s.front()
+			{
+				// PerVertex, auto-structure strides
+				u32::parse(&mut s).and_then(|bindex| if s.drop_while(ignore_chars).front() == Some(':')
+				{
+					Format::parse(s.drop_opt(1).drop_while(ignore_chars)).map(|form| (bindex, form))
+				} else { Err(ParseError::DelimiterRequired(s.current())) }).and_then(|(bindex, form)| if s.drop_while(ignore_chars).front() == Some('(')
+				{
+					u32::parse(s.drop_opt(1).drop_while(ignore_chars)).and_then(|offs|
+						if s.drop_while(ignore_chars).front() == Some(')') { s.drop_opt(1); Ok((bindex, form, offs)) }
+						else { Err(ParseError::ClosingRequired(s.current())) }
+					)
+				} else { Err(ParseError::Expected("Offset Bytes".into(), s.current())) })
+				.and_then(|(bindex, form, offs)|
+				{
+					max_binding = std::cmp::max(max_binding, bindex);
+					match vb_registry.entry(bindex)
+					{
+						Entry::Vacant(v) => { v.insert(VertexBindingRegistry::PerVertex(None)); Ok(()) },
+						Entry::Occupied(o) => match o.get()
+						{
+							&VertexBindingRegistry::PerInstance(_) => Err(ParseError::VertexBindingIntegrityCheckingFailure(bindex)),
+							_ => Ok(())
+						}
+					}.and_then(|_| Ok(valist.push(VertexAttributeInfo { binding: bindex, format: form, offset: offs })))
+				})
+			}
+			else if s.starts_with(&['C', 'o', 'n', 's', 't', 'a', 'n', 't'])
+			{
+				let n = s.drop_opt(8).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
+				if n.is_empty() { Err(ParseError::IntValueRequired(n.current())) }
+				else
+				{
+					n.clone_as_string().parse::<u32>().map_err(|e| ParseError::NumericParseError(e, n.current()))
+						.and_then(|n| if s.drop_while(ignore_chars).front() == Some(':')
+						{
+							NumericLiteral::parse(s.drop_opt(1).drop_while(ignore_chars), true).and_then(|v| if consts.contains_key(&n)
+							{
+								Err(ParseError::DefinitionOverrided)
+							}
+							else { consts.insert(n, v); Ok(()) })
+						}
+						else { Err(ParseError::Expected(":".into(), s.current())) })
+				}
+			}
+			else { Err(ParseError::UnknownConfig("Shader Module")) }.report_error(s.line());
+		}
+		let mut vbs = (0 .. max_binding + 1).map(|n| vb_registry.remove(&n).unwrap_or(VertexBindingRegistry::Empty)).collect();
+		PipelineShaderStageInfoVertex { asset: asset, consts: consts, vbindings: vbs, vattributes: valist }
 	}
 }
 fn parse_primitive_topology(source: &mut ParseLine) -> Result<VkPrimitiveTopology, ParseError>
@@ -1092,7 +1257,7 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 			AttachmentBlendState::parse; "Disabled" => Ok(AttachmentBlendState::Disabled),
 			AttachmentBlendState::parse; "None" => Err(ParseError::Expected("AttachmentBlendState Constant".into(), 0)),
 			AttachmentBlendState::parse_array; "[]" => Ok(Vec::new()),
-			AttachmentBlendState::parse_array; "[Alpha]" => Ok(vec![AttachmentBlendState::Alpha]),
+			AttachmentBlendState::parse_array; "[Alpha]" => Ok(vec![AttachmentBlendState::AlphaBlend]),
 			AttachmentBlendState::parse_array; "[" => Err(ParseError::Expected("AttachmentBlendState Constant".into(), 1)),
 			AttachmentBlendState::parse_array; "" => Err(ParseError::Expected("Array of AttachmentBlendState Constant".into(), 0))
 		}
