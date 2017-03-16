@@ -48,6 +48,21 @@ fn resolve_config_int<F, CV>(config: LocationPacked<ConfigInt>, error: &mut Erro
 	}
 }
 
+impl ConfigInt
+{
+	pub fn unwrap_as_resolved(&self) -> u32
+	{
+		match self { &ConfigInt::Value(v) => v, _ => unreachable!() }
+	}
+}
+impl Format
+{
+	pub fn unwrap_as_resolved(&self) -> VkFormat
+	{
+		match self { &Format::Value(f) => f, _ => unreachable!() }
+	}
+}
+
 pub struct ResolvedRPSubpassDesc
 {
 	pub color_outs: Vec<usize>, pub inputs: Vec<usize>
