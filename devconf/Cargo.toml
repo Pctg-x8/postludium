@@ -8,6 +8,4 @@ description = "Postludium Device Configuration"
 lazy_static = "0.2.2"
 parsetools = { path = "../parsetools" }
 interlude = { path = "../interlude" }
-
-[dev-dependencies]
 itertools = "0.5.9"
