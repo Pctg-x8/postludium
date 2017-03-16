@@ -5,35 +5,13 @@ use interlude::ffi::*;
 use super::{ignore_chars, ident_break};
 use std::ops::{Range, Deref};
 use std::fmt::Debug;
+use syntree::*;
 
 macro_rules! PartialApply1
 {
 	($f: expr; $p: expr) => (|x| $f(x, $p))
 }
 
-/// Packed value with the location which was in source
-#[derive(Debug, PartialEq)]
-pub struct LocationPacked<T: Debug + PartialEq>(pub usize, pub usize, pub T);
-impl<T: Clone + Debug + PartialEq> Clone for LocationPacked<T>
-{
-	fn clone(&self) -> Self { LocationPacked(self.0, self.1, self.2.clone()) }
-}
-impl<T: Debug + PartialEq> LocationPacked<T>
-{
-	pub fn line(&self) -> usize { self.0 }
-	pub fn col(&self) -> usize { self.1 }
-	pub fn unwrap(self) -> T { self.2 }
-
-	pub fn rewrap<CF, U: Debug + PartialEq>(self, constructor: CF) -> LocationPacked<U> where CF: FnOnce(T) -> U
-	{
-		LocationPacked(self.0, self.1, constructor(self.2))
-	}
-}
-impl<T: Debug + PartialEq> Deref for LocationPacked<T>
-{
-	type Target = T;
-	fn deref(&self) -> &T { &self.2 }
-}
 pub type LocatedParseResult<T> = Result<LocationPacked<T>, ParseError>;
 pub fn location_pack<T: Debug + PartialEq>(value: T, line: usize, col: usize) -> LocatedParseResult<T> { Ok(LocationPacked(line, col, value)) }
 /// The structure that can be constructed by source with its location, returns error when it is found.
@@ -42,9 +20,6 @@ pub trait FromSourceLocated : Sized + PartialEq + Debug
 	fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>;
 }
 
-// Integer Literal or $~~
-#[derive(Debug, PartialEq)]
-pub enum ConfigInt { Value(u32), Ref(String) }
 impl ConfigInt
 {
 	pub fn parse(input: &mut ParseLine) -> LocatedParseResult<Self>
@@ -101,8 +76,6 @@ impl ConfigInt
 		else { Self::parse(input).map(|v| vec![v]) }
 	}
 }
-#[derive(Debug, PartialEq)]
-pub enum NumericLiteral { Integer(i64), Floating(f64), Floating32(f32) }
 impl NumericLiteral
 {
 	pub fn parse(input: &mut ParseLine, default32: bool) -> LocatedParseResult<Self>
@@ -144,8 +117,6 @@ impl NumericLiteral
 		}).map(|v| LocationPacked(input.line(), startloc, v))
 	}
 }
-#[derive(Debug, PartialEq)]
-pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
 impl FromSourceLocated for AssetResource
 {
 	fn parse(input: &mut ParseLine) -> LocatedParseResult<Self>
@@ -189,8 +160,6 @@ pub fn parse_usize_range(source: &mut ParseLine) -> LocatedParseResult<Range<usi
 	else { Err(ParseError::Expected("Bytesize Range".into(), source.current())) }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum Format { Ref(String), Value(VkFormat) }
 impl FromSourceLocated for Format
 {
 	fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>

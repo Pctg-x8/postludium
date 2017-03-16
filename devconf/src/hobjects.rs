@@ -2,9 +2,8 @@
 
 use parsetools::*;
 use parser::{ident_break, ignore_chars, ParseError, from_token};
+use syntree::*;
 
-#[derive(Debug, PartialEq)]
-pub struct Transition<T> { pub from: T, pub to: T }
 impl<T> Transition<T>
 {
 	pub fn parse<'s, F>(input: &mut ParseLine<'s>, childparser: F) -> Result<Self, ParseError>
