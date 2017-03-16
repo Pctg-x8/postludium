@@ -7,7 +7,7 @@ description = "Postludium Device Configuration"
 [dependencies]
 lazy_static = "0.2.2"
 parsetools = { path = "../parsetools" }
-interlude = { git = "https://github.com/Pctg-x8/interlude.git" }
+interlude = { path = "../interlude" }
 
 [dev-dependencies]
 itertools = "0.5.9"

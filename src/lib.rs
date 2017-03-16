@@ -17,6 +17,7 @@ use std::borrow::Cow;
 use std::io::prelude::*;
 
 use parsetools::*;
+use devconf::FromSourceLocated;
 
 #[derive(Clone)]
 pub enum DevConfParsingResult<T>
@@ -259,19 +260,19 @@ pub fn parse_configuration_image(lines_iter: &mut LazyLines, screen_size: &Size2
 	};
 
 	let (mut format, mut extent, mut usage, mut component_map) = (None, None, None, ComponentMapping::straight());
-	while let Some((line, mut pline)) = devconf::acquire_line(lines_iter, 1)
+	while let Some(mut pline) = devconf::acquire_line(lines_iter, 1)
 	{
-		match devconf::parse_config_name(&mut pline)
+		match devconf::acquire_config_name(&mut pline)
 		{
 			Ok(name) => PartialEqualityMatch!(name;
 			{
-				CSTR_FORMAT[..] => format = Some(parse_image_format(pline.drop_while(is_ignored), screen_format).unwrap_on_line(line)),
-				CSTR_EXTENT[..] => extent = Some(parse_image_extent(pline.drop_while(is_ignored), dim, screen_size).unwrap_on_line(line)),
-				CSTR_USAGE[..] => usage = Some(parse_image_usage_flags(pline.drop_while(is_ignored), 0, false).unwrap_on_line(line)),
-				CSTR_COMPONENTMAP[..] => component_map = parse_component_map(pline.drop_while(is_ignored)).unwrap_on_line(line);
-				_ => DevConfParsingResult::UnsupportedParameter("Image".into()).unwrap_on_line(line)
+				CSTR_FORMAT[..] => format = Some(parse_image_format(pline.drop_while(is_ignored), screen_format).unwrap_on_line(pline.line())),
+				CSTR_EXTENT[..] => extent = Some(parse_image_extent(pline.drop_while(is_ignored), dim, screen_size).unwrap_on_line(pline.line())),
+				CSTR_USAGE[..] => usage = Some(parse_image_usage_flags(pline.drop_while(is_ignored), 0, false).unwrap_on_line(pline.line())),
+				CSTR_COMPONENTMAP[..] => component_map = parse_component_map(pline.drop_while(is_ignored)).unwrap_on_line(pline.line());
+				_ => DevConfParsingResult::UnsupportedParameter("Image".into()).unwrap_on_line(pline.line())
 			}),
-			Err(_) => DevConfParsingResult::SyntaxError.unwrap_on_line(line)
+			Err(_) => DevConfParsingResult::SyntaxError.unwrap_on_line(pline.line())
 		}
 	}
 	let (usage, devlocal) = usage.expect(&format!("Usage parameter is not presented at line {}", headline));
@@ -310,16 +311,16 @@ pub fn parse_configuration_sampler(lines_iter: &mut LazyLines) -> DevConfSampler
 	}
 
 	let (mut mag_filter, mut min_filter) = (Filter::Linear, Filter::Linear);
-	while let Some((l, mut s)) = devconf::acquire_line(lines_iter, 1)
+	while let Some(mut s) = devconf::acquire_line(lines_iter, 1)
 	{
-		match devconf::parse_config_name(&mut s)
+		match devconf::acquire_config_name(&mut s)
 		{
 			Ok(name) => PartialEqualityMatch!(name;
 			{
-				CSTR_FILTER[..]	=> { let (magf, minf) = parse_filter_type(s.drop_while(is_ignored)).unwrap_on_line(l); mag_filter = magf; min_filter = minf; };
-				_ => DevConfParsingResult::UnsupportedParameter("Sampler".into()).unwrap_on_line(l)
+				CSTR_FILTER[..]	=> { let (magf, minf) = parse_filter_type(s.drop_while(is_ignored)).unwrap_on_line(s.line()); mag_filter = magf; min_filter = minf; };
+				_ => DevConfParsingResult::UnsupportedParameter("Sampler".into()).unwrap_on_line(s.line())
 			}),
-			_ => DevConfParsingResult::SyntaxError.unwrap_on_line(l)
+			_ => DevConfParsingResult::SyntaxError.unwrap_on_line(s.line())
 		}
 	}
 
@@ -503,7 +504,7 @@ impl DevConfImages
 		let sampler_objects = samplers.iter().map(|dcs|
 		{
 			let sampler_state = SamplerState::new().filters(dcs.mag_filter, dcs.min_filter);
-			Unrecoverable!(Sampler::new(engine, &sampler_state))
+			Unrecoverable!(interlude::Sampler::new(engine, &sampler_state))
 		}).collect_vec();
 
 		DevConfImages
