@@ -330,8 +330,8 @@ impl FromSource for AttachmentBlendState
 		PartialEqualityMatchMap!(s;
 		{
 			DISABLED[..] => Ok(AttachmentBlendState::Disabled),
-			ALPHA[..] => Ok(AttachmentBlendState::Alpha),
-			PREMULTIPLIEDALPHA[..] => Ok(AttachmentBlendState::PremultipliedAlpha);
+			ALPHA[..] => Ok(AttachmentBlendState::AlphaBlend),
+			PREMULTIPLIEDALPHA[..] => Ok(AttachmentBlendState::PremultipliedAlphaBlend);
 			_ => Err(ParseError::Expected(Self::object_name(), s.current()))
 		})
 	}
@@ -1395,7 +1395,7 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 			AttachmentBlendState::parse; "Disabled" => Ok(AttachmentBlendState::Disabled),
 			AttachmentBlendState::parse; "None" => Err(ParseError::Expected("AttachmentBlendState Constant".into(), 0)),
 			AttachmentBlendState::parse_array; "[]" => Ok(Vec::new()),
-			AttachmentBlendState::parse_array; "[Alpha]" => Ok(vec![AttachmentBlendState::Alpha]),
+			AttachmentBlendState::parse_array; "[Alpha]" => Ok(vec![AttachmentBlendState::AlphaBlend]),
 			AttachmentBlendState::parse_array; "[" => Err(ParseError::Expected("AttachmentBlendState Constant".into(), 1)),
 			AttachmentBlendState::parse_array; "" => Err(ParseError::Expected("Array of AttachmentBlendState Constant".into(), 0))
 		}
