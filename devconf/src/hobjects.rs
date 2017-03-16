@@ -47,7 +47,7 @@ impl<T: Clone> Transition<T>
 	use itertools::Itertools;
 	use super::*;
 	use items::*;
-	use vk::*;
+	use interlude::ffi::*;
 
 	#[test] fn parse_transition()
 	{

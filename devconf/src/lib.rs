@@ -2,7 +2,7 @@
 
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate parsetools;
-extern crate interlude_vkdefs as vk;
+extern crate interlude;
 #[cfg(test)] extern crate itertools;
 
 #[macro_use] mod items;

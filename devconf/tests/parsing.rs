@@ -3,16 +3,13 @@
 extern crate parsetools;
 extern crate itertools;
 extern crate devconf;
-extern crate interlude_vkdefs as vk;
+extern crate interlude;
 
 use devconf::*;
-use parsetools::*;
-use itertools::Itertools;
-use vk::*;
+use interlude::ffi::*;
 
 #[test] fn parse_script()
 {
-	let mut pdr = ParsedDeviceResources::empty();
 	let testcase = "
 $FirstRP: RenderPass
 - Attachments:
