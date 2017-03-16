@@ -2,7 +2,7 @@
 
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate parsetools;
-#[cfg(test)] extern crate itertools;
+extern crate itertools;
 extern crate interlude;
 
 #[macro_use] mod items;
@@ -11,5 +11,8 @@ mod hobjects;
 pub use hobjects::*;
 mod resolver;
 
+mod syntree;
 mod parser;
 pub use parser::*;
+mod instantiate;
+pub use instantiate::*;
