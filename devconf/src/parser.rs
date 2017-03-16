@@ -27,8 +27,8 @@ impl<'a, T> Index<&'a str> for NamedContents<T>
 impl<T> Deref for NamedContents<T> { type Target = [T]; fn deref(&self) -> &[T] { &self.1 } }
 impl<T> NamedContents<T>
 {
-	fn new() -> Self { NamedContents(HashMap::new(), Vec::new()) }
-	fn insert(&mut self, name: Cow<str>, value: T) -> &mut T
+	pub fn new() -> Self { NamedContents(HashMap::new(), Vec::new()) }
+	pub fn insert(&mut self, name: Cow<str>, value: T) -> &mut T
 	{
 		let ref mut v = self.1;
 		let p = *self.0.entry(name.into_owned()).or_insert_with(||
@@ -38,7 +38,7 @@ impl<T> NamedContents<T>
 		});
 		&mut v[p]
 	}
-	fn insert_unnamed(&mut self, value: T) -> &mut T
+	pub fn insert_unnamed(&mut self, value: T) -> &mut T
 	{
 		self.1.push(value);
 		let p = self.1.len() - 1;
@@ -53,7 +53,6 @@ impl<T> NamedContents<T>
 // Source Representations
 pub struct ParsedDeviceResources
 {
-	pub includes: Vec<LocationPacked<PathBuf>>,
 	pub renderpasses: NamedContents<RenderPassData>,
 	pub simple_rps: NamedContents<SimpleRenderPassData>,
 	pub presented_rps: NamedContents<PresentedRenderPassData>,
@@ -163,7 +162,6 @@ impl ParsedDeviceResources
 	{
 		ParsedDeviceResources
 		{
-			includes: Vec::new(),
 			renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
 			descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
 			pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
@@ -407,7 +405,7 @@ impl FromSource for Offset2
 	}
 }
 
-pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut LazyLines)
+pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut Vec<LocationPacked<PathBuf>>, lines: &mut LazyLines)
 {
 	while let Some(mut source) = acquire_line(lines, 0)
 	{
@@ -418,7 +416,7 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, lines: &mut Lazy
 		{
 			// Include <StringLiteral>
 			"Include" => String::parse(source.drop_while(ignore_chars)).map(PartialApply1!(LocationPacked::rewrap; From::from))
-				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(sink.includes.push(p)) }).report_error(source.line()),
+				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(includes.push(p)) }).report_error(source.line()),
 			"RenderPass" =>
 			{
 				let p = RenderPassData::parse(&mut source, lines);

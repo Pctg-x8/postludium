@@ -32,9 +32,8 @@ $SMAABlendWeightRP: SimpleRenderPass
 $SMAACombineRP: PresentedRenderPass
 - Format: R8G8B8A8 UNORM
 #- ClearMode: None
-".chars().collect_vec();
-	let mut testlines = LazyLines::new(&testcase);
-	parse_device_resources(&mut pdr, &mut testlines);
+";
+	let pdr = load_configurations(std::path::PathBuf::new().into(), |_| Ok(testcase.to_owned()));
 	assert_eq!(pdr.renderpasses["FirstRP"].attachments["Backbuffer"], RPAttachment
 	{
 		format: LocationPacked(4, 16, Format::Value(VkFormat::R16G16B16A16_SFLOAT)), clear_on_load: Some(true), preserve_content: false,
