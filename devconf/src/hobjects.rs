@@ -45,19 +45,19 @@ impl<T: Clone> Transition<T>
 {
 	use itertools::Itertools;
 	use super::*;
-	use items::*;
 	use interlude::ffi::*;
+	use parser::FromSource;
 
 	#[test] fn parse_transition()
 	{
 		Testing!
 		{
-			PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex -> Fragment"
-				=> Ok(Transition { from: LocationPacked(1, 0, VK_SHADER_STAGE_VERTEX_BIT), to: LocationPacked(1, 10, VK_SHADER_STAGE_FRAGMENT_BIT) }),
-			PartialApply1!(Transition::parse; parse_shader_stage_bits); "Vertex"
+			PartialApply1!(Transition::parse; ShaderStageFlags::parse); "Vertex -> Fragment"
+				=> Ok(Transition { from: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT), to: ShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT) }),
+			PartialApply1!(Transition::parse; ShaderStageFlags::parse); "Vertex"
 				=> Err(ParseError::DirectionRequired(6)),
-			PartialApply1!(Transition::parse_opt; parse_shader_stage_bits); "Vertex"
-				=> Ok(Transition { from: LocationPacked(1, 0, VK_SHADER_STAGE_VERTEX_BIT), to: LocationPacked(1, 0, VK_SHADER_STAGE_VERTEX_BIT) })
+			PartialApply1!(Transition::parse_opt; ShaderStageFlags::parse); "Vertex"
+				=> Ok(Transition { from: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT), to: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT) })
 		}
 	}
 }

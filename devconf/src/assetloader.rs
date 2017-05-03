@@ -3,34 +3,23 @@
 use interlude::*;
 use interlude::ffi::*;
 use std::collections::HashMap;
-use parser::{ParsedDeviceResources, NamedContents};
-use std::rc::Rc;
+use syntree::*;
 use std::ops::Deref;
-use items::*;
+use resolver::ErrorReporter;
 
-trait ShaderClassifiable { fn classified(self) -> ShaderClass; }
-impl ShaderClassifiable for Rc<VertexShader> { fn classified(self) -> ShaderClass { ShaderClass::Vertex(self) } }
-impl ShaderClassifiable for Rc<TessellationControlShader> { fn classified(self) -> ShaderClass { ShaderClass::TessControl(self) } }
-impl ShaderClassifiable for Rc<TessellationEvaluationShader> { fn classified(self) -> ShaderClass { ShaderClass::TessEvaluation(self) } }
-impl ShaderClassifiable for Rc<GeometryShader> { fn classified(self) -> ShaderClass { ShaderClass::Geometry(self) } }
-impl ShaderClassifiable for Rc<FragmentShader> { fn classified(self) -> ShaderClass { ShaderClass::Fragment(self) } }
-pub enum ShaderClass
-{
-	Vertex(Rc<VertexShader>), TessControl(Rc<TessellationControlShader>), TessEvaluation(Rc<TessellationEvaluationShader>),
-	Geometry(Rc<GeometryShader>), Fragment(Rc<FragmentShader>)
-}
-impl ShaderClass
-{
-	fn stage_bits(&self) -> VkShaderStageFlags
-	{
-		match self
-		{
-			&ShaderClass::Vertex(_) => VK_SHADER_STAGE_VERTEX_BIT, &ShaderClass::Geometry(_) => VK_SHADER_STAGE_GEOMETRY_BIT,
-			&ShaderClass::TessControl(_) => VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, &ShaderClass::TessEvaluation(_) => VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
-			&ShaderClass::Fragment(_) => VK_SHADER_STAGE_FRAGMENT_BIT
-		}
-	}
-}
+pub struct VertexShaderModule(ShaderModule);
+pub struct FragmentShaderModule(ShaderModule);
+pub struct GeometryShaderModule(ShaderModule);
+pub struct TessControlShaderModule(ShaderModule);
+pub struct TessEvaluationShaderModule(ShaderModule);
+pub trait ClassifiedShaderModuleConst { const STAGE: VkShaderStageFlags; }
+pub trait ClassifiedShaderModule { fn stage(&self) -> VkShaderStageFlags; }
+impl ClassifiedShaderModuleConst for VertexShaderModule { const STAGE: VkShaderStageFlags = VK_SHADER_STAGE_VERTEX_BIT; }
+impl ClassifiedShaderModuleConst for FragmentShaderModule { const STAGE: VkShaderStageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; }
+impl ClassifiedShaderModuleConst for GeometryShaderModule { const STAGE: VkShaderStageFlags = VK_SHADER_STAGE_GEOMETRY_BIT; }
+impl ClassifiedShaderModuleConst for TessControlShaderModule { const STAGE: VkShaderStageFlags = VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT; }
+impl ClassifiedShaderModuleConst for TessEvaluationShaderModule { const STAGE: VkShaderStageFlags = VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT; }
+impl<T> ClassifiedShaderModule for T where T: ClassifiedShaderModuleConst { fn stage(&self) -> VkShaderStageFlags { Self::STAGE } }
 pub enum PipelineShaderClass
 {
 	Vertex(PipelineShaderProgram<VertexShader>), TessControl(PipelineShaderProgram<TessellationControlShader>),
@@ -39,23 +28,51 @@ pub enum PipelineShaderClass
 }
 pub struct LoadedAssets
 {
-	pub shaders: HashMap<String, ShaderClass>,
+	pub shaders: HashMap<String, Box<ClassifiedShaderModule>>,
 	pub pipeline_shaders: NamedContents<PipelineShaderClass>
 }
 
-pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(engine: &Engine, source: &ParsedDeviceResources) -> LoadedAssets
+pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(engine: &Engine, source: &ParsedDeviceResources, err: &mut ErrorReporter) -> LoadedAssets
 {
-	fn shader_insert_dupcheck<S: Shader>(assets: &mut LoadedAssets, name: String, shader: Rc<S>) -> Result<(), String> where Rc<S> : ShaderClassifiable
+	fn shader_insert_dupcheck<F, SM>(assets: &mut LoadedAssets, err: &mut ErrorReporter, loc: &Location, name: String, loader: F)
+		where F: FnOnce() -> EngineResult<SM>, SM: ClassifiedShaderModuleConst + 'static
 	{
 		if let Some(loaded) = assets.shaders.get(&name)
 		{
-			if S::as_stage_bits() != loaded.stage_bits() { return Err(name) }
+			if SM::STAGE != loaded.stage()
+			{
+				err.error(format!("Asset {} has loaded with different shader stage({})", name, loaded.stage()), loc);
+			}
+			return;
 		}
-		assets.shaders.entry(name).or_insert(shader.classified());
-		Ok(())
+
+		match loader()
+		{
+			Ok(b) => { assets.shaders.insert(name, box b); },
+			Err(e) => err.error(format!("Failed to load asset {}: {:?}", name, e), loc)
+		}
 	}
 	let mut assets = LoadedAssets { shaders: HashMap::new(), pipeline_shaders: NamedContents::new() };
+
+	fn load_assets_impl<E, C, SM>(sink: &mut LoadedAssets, parsed_assets: &NamedContents<IndependentPipelineShaderStageInfo>, err: &mut ErrorReporter, engine: &E, constructor: C)
+		where E: AssetProvider + Deref<Target = GraphicsInterface>, C: Fn(ShaderModule) -> SM, SM: ClassifiedShaderModuleConst + 'static
+	{
+		for s in parsed_assets.iter()
+		{
+			if let &LocationPacked(ref l, AssetResource::PathRef(ref path)) = &s.asset
+			{
+				let asset_refkey = path.join(".");
+				shader_insert_dupcheck(sink, err, l, asset_refkey, || ShaderModule::from_asset(engine, path).map(&constructor));
+			}
+		}
+	}
+	load_assets_impl(&mut assets, &source.ind_shaders.vertex, err, engine, VertexShaderModule);
+	load_assets_impl(&mut assets, &source.ind_shaders.fragment, err, engine, FragmentShaderModule);
+	load_assets_impl(&mut assets, &source.ind_shaders.geometry, err, engine, GeometryShaderModule);
+	load_assets_impl(&mut assets, &source.ind_shaders.tesscontrol, err, engine, TessControlShaderModule);
+	load_assets_impl(&mut assets, &source.ind_shaders.tessevaluation, err, engine, TessEvaluationShaderModule);
 	
+	/*
 	for ind_shader in source.ind_shaders.iter()
 	{
 		if let &LocationPacked(l, c, AssetResource::PathRef(ref path)) = &ind_shader.asset
@@ -73,6 +90,7 @@ pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(en
 			} { panic!("Shader Asset {} (at {}:{}) was attempted to load as different types", asset_refkey, l, c); }
 		}
 	}
+	*/
 
 	assets
 }

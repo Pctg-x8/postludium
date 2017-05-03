@@ -1,14 +1,14 @@
 // Resolving ConfigInt to contextual integer values
 
-use super::*;
 use interlude::ffi::*;
 use std;
+use syntree::*;
 
 pub struct ErrorReporter { has_error: bool }
 impl ErrorReporter
 {
 	pub fn new() -> Self { ErrorReporter { has_error: false } }
-	fn error(&mut self, mut msg: String, location: (usize, usize))
+	pub fn error(&mut self, mut msg: String, location: &Location)
 	{
 		use std::io::Write;
 
@@ -24,12 +24,12 @@ impl ScalarConversion<usize> for u32 { fn sconv(self) -> usize { self as usize }
 fn resolve_config_int<F, CV>(config: LocationPacked<ConfigInt>, error: &mut ErrorReporter, resolver: F) -> Option<CV>
 	where F: FnOnce(&str) -> Option<CV>, u32: ScalarConversion<CV>
 {
-	let LocationPacked(line, col, cint) = config;
+	let LocationPacked(loc, cint) = config;
 	match cint
 	{
 		ConfigInt::Ref(ref refn) => if let Some(v) = resolver(refn) { Some(v) } else
 		{
-			error.error(format!("Unknown ConfigInt Reference to {}", refn), (line, col));
+			error.error(format!("Unknown ConfigInt Reference to {}", refn), &loc);
 			None
 		},
 		ConfigInt::Value(v) => Some(v.sconv())
@@ -42,9 +42,9 @@ fn resolve_config_int<F, CV>(config: LocationPacked<ConfigInt>, error: &mut Erro
 	#[test] fn configint_resolver()
 	{
 		let mut er = ErrorReporter::new();
-		assert_eq!(resolve_config_int(LocationPacked(1, 0, ConfigInt::Ref("testing".into())), &mut er, |_| Some(0)), Some(0));
-		assert_eq!(resolve_config_int(LocationPacked(1, 0, ConfigInt::Ref("testing".into())), &mut er, |_| None), None);
-		assert_eq!(resolve_config_int(LocationPacked(1, 0, ConfigInt::Value(3)), &mut er, |_| None), Some(3));
+		assert_eq!(resolve_config_int(LocationPacked(Location(1, 0), ConfigInt::Ref("testing".into())), &mut er, |_| Some(0)), Some(0));
+		assert_eq!(resolve_config_int(LocationPacked(Location(1, 0), ConfigInt::Ref("testing".into())), &mut er, |_| None), None);
+		assert_eq!(resolve_config_int(LocationPacked(Location(1, 0), ConfigInt::Value(3)), &mut er, |_| None), Some(3));
 	}
 }
 
@@ -81,7 +81,7 @@ impl RPSubpassDesc
 
 pub struct ResolvedRPSubpassDeps
 {
-	pub passtrans: Transition<usize>, pub access_mask: Transition<LocationPacked<VkAccessFlags>>,
+	pub passtrans: Transition<usize>, pub access_mask: Transition<LocationPacked<AccessFlags>>,
 	pub stage_bits: LocationPacked<VkPipelineStageFlags>, pub by_region: bool
 }
 impl RPSubpassDeps

@@ -1,10 +1,9 @@
 
 use interlude::*;
 use interlude::ffi::*;
-use parser::*;
 use std::ops::Deref;
 use itertools::Itertools;
-use syntree::{ OperationResult, NamedContents, ParsedDeviceResources };
+use syntree::*;
 use std;
 use std::io::prelude::*;
 
@@ -19,6 +18,8 @@ pub struct DeviceResources
 	pub descriptor_set_layouts: NamedContents<DescriptorSetLayout>
 }
 
+const OPERATION_FAILED: OperationResult = OperationResult::Failed(std::borrow::Cow::Borrowed(""));
+
 impl DeviceResources
 {
 	pub fn instantaite<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(parsed: &ParsedDeviceResources, engine: &Engine) -> Self
@@ -32,7 +33,7 @@ impl DeviceResources
 			.propagate_failure(instantiate_renderpasses(&parsed.simple_rps, &mut sink.renderpasses, engine))
 			.propagate_failure(instantiate_renderpasses(&parsed.presented_rps, &mut sink.renderpasses, engine));
 		
-		if r == OperationResult::Failed { panic!("Some errors occured in instantiating."); }
+		if r == OPERATION_FAILED { panic!("Some errors occured in instantiating."); }
 
 		sink
 	}
@@ -50,10 +51,10 @@ fn instantiate_renderpasses<T: RenderPassInstantiate>(source: &NamedContents<T>,
 	{
 		match r.get(&x)
 		{
-			Some(&n) => if sink.insert_unique(n.into(), rp.instantiate(engine)) == OperationResult::Failed
+			Some(&n) => if sink.insert_unique(n.into(), rp.instantiate(engine)) == OPERATION_FAILED
 			{
 				println_err!("Duplication detected in RenderPasses: {}", n);
-				opr = OperationResult::Failed;
+				opr = OPERATION_FAILED;
 			},
 			None => sink.insert_unnamed(rp.instantiate(engine))
 		}
@@ -80,7 +81,7 @@ impl RenderPassInstantiate for RenderPassData
 		{
 			src: p.passtrans.from.value_ref().unwrap_as_resolved(), dst: p.passtrans.to.value_ref().unwrap_as_resolved(),
 			src_stage_mask: *p.stage_bits.value_ref(), dst_stage_mask: *p.stage_bits.value_ref(),
-			src_access_mask: *p.access_mask.from.value_ref(), dst_access_mask: *p.access_mask.to.value_ref(),
+			src_access_mask: p.access_mask.from.value_ref().0, dst_access_mask: p.access_mask.to.value_ref().0,
 			depend_by_region: p.by_region
 		}).collect_vec();
 

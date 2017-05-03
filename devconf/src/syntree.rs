@@ -1,18 +1,20 @@
-// Syntax Elements
+//! Syntax Tree Elements
 
-use std::ops::{ Index, Deref, Range };
+use std;
+use std::ops::{Index, Deref, Range};
 use std::fmt::Debug;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::path::PathBuf;
 use interlude::ffi::*;
 use interlude::*;
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy)]
-pub enum OperationResult { Success, Failed }
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum OperationResult { Success, Failed(Cow<'static, str>) }
 impl OperationResult
 {
-	pub fn propagate_failure(self, other: Self) -> Self { if other == OperationResult::Failed { other } else { self } }
+	pub fn propagate_failure(self, other: Self) -> Self { if let OperationResult::Failed(_) = other { other } else { self } }
+	pub fn report_error(self, line: usize) { if let OperationResult::Failed(reason) = self { panic!("Operation has failed({}) in processing at line {}", reason, line) } }
 }
 
 pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
@@ -41,12 +43,20 @@ impl<T> NamedContents<T>
 	}
 	pub fn insert_unique(&mut self, name: Cow<str>, value: T) -> OperationResult
 	{
-		if self.0.contains_key(name.deref()) { OperationResult::Failed }
+		if self.0.contains_key(name.deref()) { OperationResult::Failed(format!("Duplicated Entry: {}", name).into()) }
 		else { self.1.push(value); self.0.insert(name.into_owned(), self.1.len() - 1); OperationResult::Success }
 	}
 	pub fn insert_unnamed(&mut self, value: T)
 	{
 		self.1.push(value);
+	}
+	pub fn insert_auto(&mut self, name: Option<Cow<str>>, value: T)
+	{
+		if let Some(n) = name { self.insert(n, value) } else { self.insert_unnamed(value) }
+	}
+	pub fn insert_uniq_auto(&mut self, name: Option<Cow<str>>, value: T) -> OperationResult
+	{
+		if let Some(n) = name { self.insert_unique(n, value) } else { self.insert_unnamed(value); OperationResult::Success }
 	}
 	pub fn reverse_index(&self, k: &str) -> Option<usize>
 	{
@@ -63,29 +73,37 @@ impl<T> NamedContents<T>
 	}
 }
 
+/// The location information in source: Element Order = Line, Column
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct Location(pub usize, pub usize);
+impl Location
+{
+	pub fn line(&self) -> usize { self.0 }
+	pub fn column(&self) -> usize { self.1 }
+}
+impl std::fmt::Display for Location
+{
+	fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result
+	{
+		write!(formatter, "{}:{}", self.0, self.1)
+	}
+}
 /// SynTree Container: Packed value with the location which was in source
 #[derive(Debug, PartialEq)]
-pub struct LocationPacked<T: Debug + PartialEq>(pub usize, pub usize, pub T);
+pub struct LocationPacked<T: Debug + PartialEq>(pub Location, pub T);
 impl<T: Clone + Debug + PartialEq> Clone for LocationPacked<T>
 {
-	fn clone(&self) -> Self { LocationPacked(self.0, self.1, self.2.clone()) }
+	fn clone(&self) -> Self { LocationPacked(self.0.clone(), self.1.clone()) }
 }
 impl<T: Debug + PartialEq> LocationPacked<T>
 {
-	pub fn line(&self) -> usize { self.0 }
-	pub fn col(&self) -> usize { self.1 }
-	pub fn unwrap(self) -> T { self.2 }
-	pub fn value_ref(&self) -> &T { &self.2 }
+	pub fn unwrap(self) -> T { self.1 }
+	pub fn value_ref(&self) -> &T { &self.1 }
 
-	pub fn rewrap<CF, U: Debug + PartialEq>(self, constructor: CF) -> LocationPacked<U> where CF: FnOnce(T) -> U
+	pub fn apply<F, U: Debug + PartialEq>(self, func: F) -> LocationPacked<U> where F: FnOnce(T) -> U
 	{
-		LocationPacked(self.0, self.1, constructor(self.2))
+		LocationPacked(self.0, func(self.1))
 	}
-}
-impl<T: Debug + PartialEq> Deref for LocationPacked<T>
-{
-	type Target = T;
-	fn deref(&self) -> &T { &self.2 }
 }
 /// SynTree Container: To-From Pair
 #[derive(Debug, PartialEq)]
@@ -102,6 +120,22 @@ pub enum NumericLiteral { Integer(i64), Floating(f64), Floating32(f32) }
 #[derive(Debug, PartialEq)]
 pub enum AssetResource { IntRef(ConfigInt), PathRef(Vec<String>) }
 
+/// Image Dimension 1D / 2D / 3D
+#[derive(Debug, PartialEq)]
+pub enum ImageDimension
+{
+	/// 1D
+	Linear,
+	/// 2D
+	Planar,
+	/// 3D
+	Cubic
+}
+#[derive(Clone, Copy, PartialEq, Debug)] pub struct AccessFlags(pub VkAccessFlags);
+#[derive(Debug, PartialEq, Clone, Copy)] pub struct ShaderStageFlags(pub VkShaderStageFlags);
+impl std::cmp::PartialEq<VkAccessFlags> for AccessFlags { fn eq(&self, t: &VkAccessFlags) -> bool { self.0 == *t } }
+impl std::cmp::PartialEq<VkShaderStageFlags> for ShaderStageFlags { fn eq(&self, t: &VkShaderStageFlags) -> bool { self.0 == *t } }
+
 pub struct ParsedDeviceResources
 {
 	pub includes: Vec<LocationPacked<PathBuf>>,
@@ -115,7 +149,26 @@ pub struct ParsedDeviceResources
 	pub pipeline_states: NamedContents<PipelineStateInfo>,
 	pub externs: NamedContents<ExternalResourceData>,
 	pub framebuffers: NamedContents<FramebufferInfo>,
-	pub ind_shaders: NamedContents<IndependentPipelineShaderStageInfo>
+	pub ind_shaders: IndependentShaders
+}
+pub struct IndependentShaders
+{
+	pub vertex: NamedContents<IndependentPipelineShaderStageInfo>,
+	pub tesscontrol: NamedContents<IndependentPipelineShaderStageInfo>,
+	pub tessevaluation: NamedContents<IndependentPipelineShaderStageInfo>,
+	pub geometry: NamedContents<IndependentPipelineShaderStageInfo>,
+	pub fragment: NamedContents<IndependentPipelineShaderStageInfo>
+}
+impl IndependentShaders
+{
+	pub fn new() -> Self
+	{
+		IndependentShaders
+		{
+			vertex: NamedContents::new(), tesscontrol: NamedContents::new(), tessevaluation: NamedContents::new(),
+			geometry: NamedContents::new(), fragment: NamedContents::new()
+		}
+	}
 }
 #[derive(Debug, PartialEq)]
 pub struct ImageDescription
@@ -129,7 +182,7 @@ pub struct RPSubpassDesc { pub color_outs: Vec<LocationPacked<ConfigInt>>, pub i
 #[derive(Debug, PartialEq)]
 pub struct RPSubpassDeps
 {
-	pub passtrans: Transition<LocationPacked<ConfigInt>>, pub access_mask: Transition<LocationPacked<VkAccessFlags>>,
+	pub passtrans: Transition<LocationPacked<ConfigInt>>, pub access_mask: Transition<LocationPacked<AccessFlags>>,
 	pub stage_bits: LocationPacked<VkPipelineStageFlags>, pub by_region: bool
 }
 pub struct RenderPassData { pub attachments: NamedContents<RPAttachment>, pub subpasses: NamedContents<RPSubpassDesc>, pub deps: Vec<RPSubpassDeps> }
@@ -142,7 +195,7 @@ pub struct PreciseRenderPassRef { pub rp: LocationPacked<ConfigInt>, pub subpass
 #[derive(Debug, PartialEq)]
 pub enum ExternalResourceData
 {
-	ImageView { dim: u8, refname: LocationPacked<String> }, SwapChainViews
+	ImageView { dim: ImageDimension, refname: LocationPacked<String> }, SwapChainViews
 }
 #[derive(Debug, PartialEq)]
 pub enum FramebufferStyle
@@ -150,7 +203,7 @@ pub enum FramebufferStyle
 	WithRenderPass(LocationPacked<ConfigInt>), Simple(Option<bool>), Presented(Option<bool>)
 }
 #[derive(Debug, PartialEq)]
-pub struct FramebufferInfo { style: FramebufferStyle, views: Vec<LocationPacked<ConfigInt>> }
+pub struct FramebufferInfo { pub style: FramebufferStyle, pub views: Vec<LocationPacked<ConfigInt>> }
 #[derive(Debug, PartialEq)]
 pub enum BufferDescriptorOption { None, TexelStore, DynamicOffset }
 #[derive(Debug, PartialEq)]
@@ -160,39 +213,47 @@ pub enum DescriptorEntryKind
 	UniformBuffer(BufferDescriptorOption), StorageBuffer(BufferDescriptorOption), InputAttachment
 }
 #[derive(Debug, PartialEq)]
-pub struct DescriptorEntry { kind: DescriptorEntryKind, count: usize, visibility: VkShaderStageFlags }
+pub struct DescriptorEntry { pub kind: DescriptorEntryKind, pub count: usize, pub visibility: ShaderStageFlags }
 #[derive(Debug, PartialEq)]
-pub struct DescriptorSetLayoutData { entries: Vec<DescriptorEntry> }
+pub struct DescriptorSetLayoutData { pub entries: Vec<DescriptorEntry> }
 #[derive(Debug, PartialEq)]
-pub struct PushConstantLayout { range: LocationPacked<Range<usize>>, visibility: VkShaderStageFlags }
+pub struct PushConstantLayout { pub range: Range<usize>, pub visibility: ShaderStageFlags }
 #[derive(Debug, PartialEq)]
-pub struct PipelineLayout { descs: Vec<LocationPacked<ConfigInt>>, pushconstants: Vec<LocationPacked<ConfigInt>> }
+pub struct PipelineLayout { pub descs: Vec<LocationPacked<ConfigInt>>, pub pushconstants: Vec<LocationPacked<ConfigInt>> }
 #[derive(Debug, PartialEq)]
-pub struct DescriptorSetsInfo(Vec<DescriptorSetEntry>);
+pub struct DescriptorSetsInfo(pub Vec<DescriptorSetEntry>);
 #[derive(Debug, PartialEq)]
-pub struct DescriptorSetEntry { name: Option<String>, layout: LocationPacked<ConfigInt> }
+pub struct DescriptorSetEntry { pub name: Option<String>, pub layout: LocationPacked<ConfigInt> }
+#[derive(Debug, PartialEq)] pub enum StreamBindingDesc { PerVertex(usize), PerInstance(usize) }
+#[derive(Debug, PartialEq)] pub struct VertexInputInfo { pub binding: usize, pub offset: usize, pub format: Format }
 #[derive(Debug, PartialEq)]
 pub struct VertexShaderStageInfo
 {
-	asset: LocationPacked<AssetResource>, consts: HashMap<u32, LocationPacked<NumericLiteral>>
+	pub asset: LocationPacked<AssetResource>, pub consts: BTreeMap<usize, LocationPacked<NumericLiteral>>,
+	pub stream_bindings: Vec<StreamBindingDesc>, pub inputs: BTreeMap<usize, VertexInputInfo>
 }
 #[derive(Debug, PartialEq)]
 pub struct PipelineShaderStageInfo
 {
-	asset: LocationPacked<AssetResource>, consts: HashMap<u32, LocationPacked<NumericLiteral>>
+	pub asset: LocationPacked<AssetResource>, pub consts: BTreeMap<usize, LocationPacked<NumericLiteral>>
 }
 #[derive(Debug, PartialEq)]
 pub struct IndependentPipelineShaderStageInfo
 {
-	stage: VkShaderStageFlags, asset: LocationPacked<AssetResource>, consts: HashMap<u32, LocationPacked<NumericLiteral>>
+	pub stage: VkShaderStageFlags, pub asset: LocationPacked<AssetResource>, pub consts: BTreeMap<usize, LocationPacked<NumericLiteral>>
 }
 #[derive(Debug, PartialEq)]
 pub struct PipelineStateInfo
 {
-	renderpass: PreciseRenderPassRef, layout_ref: LocationPacked<ConfigInt>,
-	vertex_shader: PipelineShaderStageInfo, geometry_shader: Option<PipelineShaderStageInfo>, fragment_shader: Option<PipelineShaderStageInfo>,
-	tesscontrol_shader: Option<PipelineShaderStageInfo>, tessevaluation_shader: Option<PipelineShaderStageInfo>,
-	primitive_topology: VkPrimitiveTopology, viewport_scissors: Vec<ViewportScissorEntry>, blendstates: Vec<AttachmentBlendState>
+	pub renderpass: PreciseRenderPassRef, pub layout_ref: LocationPacked<ConfigInt>,
+	pub vertex_shader			: VertexShaderStageInfo,
+	pub geometry_shader			: Option<PipelineShaderStageInfo>,
+	pub fragment_shader			: Option<PipelineShaderStageInfo>,
+	pub tesscontrol_shader		: Option<PipelineShaderStageInfo>,
+	pub tessevaluation_shader	: Option<PipelineShaderStageInfo>,
+	pub primitive_topology		: VkPrimitiveTopology,
+	pub viewport_scissors		: Vec<ViewportScissorEntry>,
+	pub blendstates				: Vec<AttachmentBlendState>
 }
 #[derive(Debug, PartialEq)]
 pub enum ViewportScissorEntry { ScreenView, Custom(VkViewport, VkRect2D) }
@@ -200,3 +261,16 @@ pub enum ViewportScissorEntry { ScreenView, Custom(VkViewport, VkRect2D) }
 pub struct VertexAttributeInfo { binding: u32, format: LocationPacked<Format>, offset: u32 }
 #[derive(Debug, PartialEq)]
 pub enum VertexBindingRegistry { PerVertex(Option<u32>), PerInstance(Option<u32>), Empty }
+
+/// Element Trait: Indicates that the element has location information.
+pub trait LocationProvider
+{
+	fn location(&self) -> &Location;
+
+	// Shorthands
+	fn line(&self) -> usize { self.location().line() }
+	fn column(&self) -> usize { self.location().column() }
+}
+impl<T: PartialEq + Debug> LocationProvider for LocationPacked<T> { fn location(&self) -> &Location { &self.0 } }
+impl<T> LocationProvider for [T] where T: LocationProvider { fn location(&self) -> &Location { self[0].location() } }
+impl<T> LocationProvider for Transition<T> where T: LocationProvider { fn location(&self) -> &Location { self.from.location() } }
