@@ -58,7 +58,7 @@ pub trait FromSourceArrayLocated : FromSourceLocated
 	}
 }
 
-impl FromSource for ConfigInt
+impl<N: FromSource> FromSource for ConfigInt<N>
 {
 	fn object_name() -> Cow<'static, str> { "ConfigInt".into() }
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
@@ -67,12 +67,7 @@ impl FromSource for ConfigInt
 		{
 			Some('$') => source.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::NameRequired(s.current()))
 				.map(|x| ConfigInt::Ref(x.clone_as_string())),
-			Some('0' ... '9') =>
-			{
-				let refn = source.take_while(|c| '0' <= c && c <= '9');
-				refn.clone_as_string().parse::<u32>()
-					.map_err(|e| ParseError::NumericParseError(e, refn.current())).map(ConfigInt::Value)
-			},
+			Some(_) => source.parse::<N>().map(ConfigInt::Value),
 			_ => Err(ParseError::IntValueRequired(source.current()))
 		}
 	}

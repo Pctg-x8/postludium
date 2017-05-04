@@ -28,7 +28,7 @@ impl ParsedDeviceResources
 			includes: Vec::new(), renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
 			descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
 			pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
-			externs: NamedContents::new(), framebuffers: NamedContents::new(), ind_shaders: IndependentShaders::new()
+			externs: NamedContents::new(), framebuffers: NamedContents::new(), images: NamedContents::new(), ind_shaders: IndependentShaders::new()
 		}
 	}
 }
@@ -70,7 +70,9 @@ pub enum ParseError
 	BytesizeRequired(usize),
 	UnknownPrimitiveTopology(bool, usize),
 	NameNotAllowed(usize),
-	EntryDuplicated(Cow<'static, str>)
+	EntryDuplicated(Cow<'static, str>),
+	UnknownComponentSwizzle(usize),
+	UnknownUsageBits(&'static str, usize)
 }
 pub struct ParseErrorWithLine(ParseError, usize);
 trait WithLine<T, E> { fn with_line(self, line: usize) -> Result<T, E>; }
@@ -103,6 +105,8 @@ impl std::fmt::Debug for ParseErrorWithLine
 			&ParseError::UnknownClearMode(p) => write!(fmt, "Unknown Clear Mode was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownShaderStageFlag(p) => write!(fmt, "Unknown Shader Stage Flag was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownDescriptorKind(p) => write!(fmt, "Unknown Descriptor Kind was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownComponentSwizzle(p) => write!(fmt, "Unknown Swizzling Component was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownUsageBits(f, p) => write!(fmt, "Unknown Usage Bits for {} was found at line {}, col {}", f, self.1, p),
 			&ParseError::FormatRequired(p) => write!(fmt, "Format required for RenderPass Attachment at line {}, col {}", self.1, p),
 			&ParseError::UnknownPrimitiveTopology(true, p) => write!(fmt, "Unknown Primitive Topology with Adjacency was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownPrimitiveTopology(false, p) => write!(fmt, "Unknown Primitive Topology was found at line {}, col {}", self.1, p),
@@ -405,6 +409,36 @@ impl FromSource for Offset2
 		source.drop_while(ignore_chars).consume_closing(')', |_| Ok(Offset2(x, y)))
 	}
 }
+pub struct VariadicSize(Vec<ConfigInt<usize>>);
+impl FromSource for VariadicSize
+{
+	fn object_name() -> Cow<'static, str> { "VarSize".into() }
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		// usize / "(" usize,* ")"
+		if source.front() == Some('(')
+		{
+			fn recurse(source: &mut ParseLine, sink: &mut Vec<ConfigInt<usize>>) -> Result<(), ParseError>
+			{
+				source.parse::<ConfigInt<usize>>().and_then(|v|
+				{
+					sink.push(v);
+					let do_continue = source.drop_while(ignore_chars).front() == Some(',');
+					match source.drop_while(|x| ignore_chars(x) || x == ',').front()
+					{
+						Some(')') => { source.drop_opt(1); Ok(()) },
+						Some('0' ... '9') if do_continue => recurse(source, sink),
+						Some('$') if do_continue => recurse(source, sink),
+						_ => Err(ParseError::ClosingRequired(source.current()))
+					}
+				})
+			}
+			let mut sink = Vec::new();
+			recurse(source.drop_opt(1).drop_while(ignore_chars), &mut sink).map(|_| VariadicSize(sink))
+		}
+		else { source.parse::<ConfigInt<usize>>().map(|x| VariadicSize(vec![x])) }
+	}
+}
 
 pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut Vec<LocationPacked<PathBuf>>, lines: &mut LazyLines)
 	-> Result<(), ParseErrorWithLine>
@@ -449,6 +483,8 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 				.and_then(|p| insert_uniq_auto_or(&mut sink.externs, name, p, sline)),
 			"Framebuffer" => source.drop_while(ignore_chars).block::<FramebufferInfo>(lines)
 				.and_then(|p| insert_uniq_auto_or(&mut sink.framebuffers, name, p, sline)),
+			"Image" => source.drop_while(ignore_chars).block::<ImageDescription>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.images, name, p, sline)),
 			"VertexShader" => VertexShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
 				.and_then(|vsinfo| insert_uniq_auto_or(&mut sink.ind_shaders.vertex, name, vsinfo, sline)),
 			"FragmentShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
@@ -488,13 +524,78 @@ impl FromSource for ExternalResourceData
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
 		let s = source.take_until(ident_break);
-		match s.clone_as_string().as_ref()
+		match s.chars()
 		{
-			"ImageView" => source.drop_while(ignore_chars).parse::<ImageDimension>()
+			&['I', 'm', 'a', 'g', 'e', 'V', 'i', 'e', 'w'] => source.drop_while(ignore_chars).parse::<ImageDimension>()
 				.and_then(|d| source.drop_while(ignore_chars).parse::<StringLiteral>().map(|n| ExternalResourceData::ImageView { dim: d, refname: n })),
-			"SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
+			&['S', 'w', 'a', 'p', 'C', 'h', 'a', 'i', 'n', 'V', 'i', 'e', 'w', 's'] => Ok(ExternalResourceData::SwapChainViews),
 			_ => Err(ParseError::UnknownExternalResource(s.current()))
 		}
+	}
+}
+impl FromSource for ComponentMapping
+{
+	fn object_name() -> Cow<'static, str> { "Component Mapping".into() }
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		// (R / G / B / A){4}
+		fn component_swizzle(c: char, col: usize) -> Result<ComponentSwizzle, ParseError>
+		{
+			match c
+			{
+				'r' | 'R' => Ok(ComponentSwizzle::R),
+				'g' | 'G' => Ok(ComponentSwizzle::G),
+				'b' | 'B' => Ok(ComponentSwizzle::B),
+				'a' | 'A' => Ok(ComponentSwizzle::A),
+				_ => Err(ParseError::UnknownComponentSwizzle(col))
+			}
+		}
+
+		let r = source.front().ok_or(ParseError::Expected(Self::object_name(), source.current())).and_then(|c| component_swizzle(c, source.current()))?;
+		let g = source.peek(1).ok_or(ParseError::Expected(Self::object_name(), source.current())).and_then(|c| component_swizzle(c, source.current()))?;
+		let b = source.peek(2).ok_or(ParseError::Expected(Self::object_name(), source.current())).and_then(|c| component_swizzle(c, source.current()))?;
+		let a = source.peek(3).ok_or(ParseError::Expected(Self::object_name(), source.current())).and_then(|c| component_swizzle(c, source.current()))?;
+		source.drop_opt(4); Ok(ComponentMapping(r, g, b, a))
+	}
+}
+impl FromSourceBlock for ImageDescription
+{
+	/// "Image" | "<" Format ["(" ComponentMap ")"] ">" VariadicSize
+	fn parse(enterline: &mut ParseLine, lines: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
+	{
+		let format = enterline.consume_char('<', || "\"<\"".into(), |s| s.drop_while(ignore_chars).parse::<Format>()).with_line(enterline.line())?;
+		let component_map = if enterline.drop_while(ignore_chars).front() == Some('(')
+		{
+			enterline.drop_opt(1).drop_while(ignore_chars).parse::<ComponentMapping>()
+				.and_then(|cm| enterline.drop_while(ignore_chars).consume_closing(')', |_| Ok(cm)))
+		}
+		else { Ok(ComponentMapping::straight()) }.with_line(enterline.line())?;
+		let extent = enterline.drop_while(ignore_chars).consume_closing('>', |s| s.drop_while(ignore_chars).parse::<VariadicSize>()).with_line(enterline.line())?;
+
+		let mut obj = ImageDescription { extent: extent.0, format, mapping: component_map, device_local: false, usage: 0 };
+		while let Some(mut s) = acquire_line(lines, 1)
+		{
+			acquire_config_name(&mut s).and_then(|name| match name.chars()
+			{
+				&['U', 's', 'a', 'g', 'e'] =>
+				{
+					fn recurse(source: &mut ParseLine, sink: &mut ImageDescription) -> Result<(), ParseError>
+					{
+						if sampled_token(source) { sink.usage |= VK_IMAGE_USAGE_SAMPLED_BIT; Ok(()) }
+						else if color_attachment_token(source) { sink.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; Ok(()) }
+						else if input_attachment_token(source) { sink.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT; Ok(()) }
+						else if device_local_token(source) { sink.device_local = true; Ok(()) }
+						else { Err(ParseError::UnknownUsageBits("Image", source.current())) }?;
+
+						if source.drop_while(ignore_chars).front() == Some('/') { recurse(source.drop_opt(1).drop_while(ignore_chars), sink) }
+						else { Ok(()) }
+					}
+					recurse(s.drop_while(ignore_chars), &mut obj)
+				},
+				_ => Err(ParseError::UnknownConfig("Image Description".into()))
+			}).with_line(s.line())?;
+		}
+		Ok(obj)
 	}
 }
 
@@ -1073,12 +1174,17 @@ Token!(clear_on_load_token		(['C', 'l', 'e', 'a', 'r', 'O', 'n', 'L', 'o', 'a', 
 Token!(load_content_token		(['L', 'o', 'a', 'd', 'C', 'o', 'n', 't', 'e', 'n', 't']));
 Token!(preserve_content_token	(['P', 'r', 'e', 's', 'e', 'r', 'v', 'e', 'C', 'o', 'n', 't', 'e', 'n', 't']));
 Token!(render_to_token			(['R', 'e', 'n', 'd', 'e', 'r', 'T', 'o']));
+Token!(sampled_token			(['S', 'a', 'm', 'p', 'l', 'e', 'd']));
+Token!(color_attachment_token	(['C', 'o', 'l', 'o', 'r', 'A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't']));
+Token!(input_attachment_token	(['I', 'n', 'p', 'u', 't', 'A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't']));
+Token!(device_local_token		(['D', 'e', 'v', 'i', 'c', 'e', 'L', 'o', 'c', 'a', 'l']));
 
 // --- Parser Utils --- //
 pub fn ignore_chars(c: char) -> bool { c == ' ' || c == '\t' }
 pub fn ident_break(c: char) -> bool
 {
-	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
+	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || 
+	c == '(' || c == ')' || ignore_chars(c)
 }
 pub trait SetOnce<T = Self>: Sized
 {

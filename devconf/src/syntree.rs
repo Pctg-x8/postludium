@@ -138,7 +138,7 @@ pub struct Transition<T> { pub from: T, pub to: T }
 pub enum Format { Ref(String), Value(VkFormat) }
 /// Integer Literal or $~~
 #[derive(Debug, PartialEq)]
-pub enum ConfigInt { Value(u32), Ref(String) }
+pub enum ConfigInt<N = u32> { Value(N), Ref(String) }
 #[derive(Debug, PartialEq)]
 pub enum NumericLiteral { Integer(i64), Floating(f64), Floating32(f32) }
 #[derive(Debug, PartialEq)]
@@ -173,6 +173,7 @@ pub struct ParsedDeviceResources
 	pub pipeline_states: NamedContents<PipelineStateInfo>,
 	pub externs: NamedContents<ExternalResourceData>,
 	pub framebuffers: NamedContents<FramebufferInfo>,
+	pub images: NamedContents<ImageDescription>,
 	pub ind_shaders: IndependentShaders
 }
 pub struct IndependentShaders
@@ -197,7 +198,7 @@ impl IndependentShaders
 #[derive(Debug, PartialEq)]
 pub struct ImageDescription
 {
-	pub dim: u32, pub format: LocationPacked<Format>, pub extent: LocationPacked<(f32, f32, f32)>, pub device_local: bool, pub usage: VkImageUsageFlags
+	pub extent: Vec<ConfigInt<usize>>, pub format: Format, pub device_local: bool, pub usage: VkImageUsageFlags, pub mapping: ComponentMapping
 }
 #[derive(Debug, PartialEq)]
 pub struct RPAttachment { pub format: LocationPacked<Format>, pub layouts: Transition<VkImageLayout>, pub clear_on_load: Option<bool>, pub preserve_content: bool }
