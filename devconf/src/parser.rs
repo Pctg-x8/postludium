@@ -90,7 +90,7 @@ impl std::fmt::Debug for ParseErrorWithLine
 		{
 			&ParseError::NameRequired(p) => write!(fmt, "Name required following $ at line {}, col {}", self.1, p),
 			&ParseError::UnknownDeviceResource(p) => write!(fmt, "Unknown Device Resource was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownFormat(p) => write!(fmt, "Unknown Image Format was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownFormat(p) => write!(fmt, "Unknown Format was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownImageLayout(p) => write!(fmt, "Unknown Image Layout was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownRenderPassAttachmentOptions(p) => write!(fmt, "Unknown Options for RenderPass Attachment was found at line {}, col {}", self.1, p),
 			&ParseError::ImageLayoutRequired(p) => write!(fmt, "Image Layout required at line {}, col {}", self.1, p),
@@ -958,7 +958,8 @@ impl FromSourceBlock for PipelineStateInfo
 	{
 		/// PipelineState | "for" precise_rpref "with" int
 		let r = enterline.consume(for_token, || "\"for\"".into(), |s| s.drop_while(ignore_chars).parse::<PreciseRenderPassRef>()).with_line(enterline.line())?;
-		let l = enterline.consume(with_token, || "\"with\"".into(), |s| s.drop_while(ignore_chars).parse_loc::<ConfigInt>()).with_line(enterline.line())?;
+		let l = enterline.drop_while(ignore_chars).consume(with_token, || "\"with\"".into(),
+			|s| s.drop_while(ignore_chars).parse_loc::<ConfigInt>()).with_line(enterline.line())?;
 
 		struct ShaderInfos
 		{
