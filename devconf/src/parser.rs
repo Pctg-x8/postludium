@@ -418,7 +418,11 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 		let sline = source.line();
 		fn insert_uniq_auto_or<T>(target: &mut NamedContents<T>, name: Option<Cow<str>>, value: T, eline: usize) -> Result<(), ParseErrorWithLine>
 		{
-			target.insert_uniq_auto(name, value).rewrap_err(|n| ParseErrorWithLine(ParseError::EntryDuplicated(n), eline))
+			target.insert_auto(name, value).into_parse_result().with_line(eline)
+		}
+		fn insert_vuniq_auto_or<T: Eq>(target: &mut NamedContents<T>, name: Option<Cow<str>>, value: T, eline: usize) -> Result<(), ParseErrorWithLine>
+		{
+			target.insert_auto_vunique(name, value).into_parse_result().with_line(eline)
 		}
 		match s.clone_as_string().as_ref()
 		{
@@ -432,9 +436,9 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 			"PresentedRenderPass" => source.block::<PresentedRenderPassData>(lines)
 				.and_then(|p| insert_uniq_auto_or(&mut sink.presented_rps, name, p, sline)),
 			"DescriptorSetLayout" => source.block::<DescriptorSetLayoutData>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.descriptor_set_layouts, name, p, sline)),
+				.and_then(|p| insert_vuniq_auto_or(&mut sink.descriptor_set_layouts, name, p, sline)),
 			"PushConstantLayout" => source.block::<PushConstantLayout>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.push_constant_layouts, name, p, sline)),
+				.and_then(|p| insert_vuniq_auto_or(&mut sink.push_constant_layouts, name, p, sline)),
 			"PipelineLayout" => source.block::<PipelineLayout>(lines)
 				.and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_layouts, name, p, sline)),
 			"DescriptorSets" => source.block::<DescriptorSetsInfo>(lines)
@@ -515,7 +519,7 @@ impl FromSourceBlock for RenderPassData
 					while let Some(mut s) = acquire_line(source, 2)
 					{
 						let l = NamedConfigLine::parse(&mut s, RPAttachment::parse).with_line(s.line())?;
-						rpd.attachments.insert_uniq_auto(l.name.map(From::from), l.config).rewrap_err(|n| ParseErrorWithLine(ParseError::EntryDuplicated(n), s.line()))?;
+						rpd.attachments.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
 					}
 					Ok(())
 				},
@@ -525,7 +529,7 @@ impl FromSourceBlock for RenderPassData
 					while let Some(mut s) = acquire_line(source, 2)
 					{
 						let l = NamedConfigLine::parse(&mut s, RPSubpassDesc::parse).with_line(s.line())?;
-						rpd.subpasses.insert_uniq_auto(l.name.map(From::from), l.config).rewrap_err(|n| ParseErrorWithLine(ParseError::EntryDuplicated(n), s.line()))?;
+						rpd.subpasses.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
 					}
 					Ok(())
 				},
@@ -1202,16 +1206,8 @@ impl NamedConfigLine<()>
 	{
 		if input.front() == Some('$')
 		{
-			let name = input.drop_opt(1).take_until(ident_break);
-			if name.is_empty() { Err(ParseError::NameRequired(name.current())) }
-			else
-			{
-				if input.drop_while(ignore_chars).front() == Some(':')
-				{
-					input.drop_opt(1); Ok(NamedConfigLine { name: Some(name.clone_as_string()), config: () })
-				}
-				else { Err(ParseError::DelimiterRequired(input.current())) }
-			}
+			let name = input.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::NameRequired(s.current()))?;
+			input.drop_while(ignore_chars).consume_delimiter(':', |_| Ok(NamedConfigLine { name: Some(name.clone_as_string()), config: () }))
 		}
 		else { Ok(NamedConfigLine { name: None, config: () }) }
 	}

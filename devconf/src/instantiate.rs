@@ -4,7 +4,7 @@ use interlude::ffi::*;
 use std::ops::Deref;
 use itertools::Itertools;
 use syntree::*;
-use std;
+use {std, syntree};
 use std::io::prelude::*;
 
 macro_rules! println_err
@@ -49,14 +49,10 @@ fn instantiate_renderpasses<T: RenderPassInstantiate>(source: &NamedContents<T>,
 	let r = source.make_reverse_dict();
 	for (x, rp) in source.iter().enumerate()
 	{
-		match r.get(&x)
+		if let InsertionResult::Duplicated(n) = sink.insert_auto(r.get(&x).map(|&x| x.into()), rp.instantiate(engine))
 		{
-			Some(&n) => if sink.insert_unique(n.into(), rp.instantiate(engine)) == OPERATION_FAILED
-			{
-				println_err!("Duplication detected in RenderPasses: {}", n);
-				opr = OPERATION_FAILED;
-			},
-			None => sink.insert_unnamed(rp.instantiate(engine))
+			println_err!("Duplication detected in RenderPasses: {}", n);
+			opr = OPERATION_FAILED;
 		}
 	}
 	opr
@@ -116,5 +112,21 @@ impl RenderPassInstantiate for PresentedRenderPassData
 		let subpass = PassDesc { color_attachment_indices: vec![AttachmentRef::color(0)], .. Default::default() };
 
 		RenderPass::new(engine, &[attachment], &[subpass], &[]).or_crash()
+	}
+}
+
+pub struct PipelineLayoutInstances { index_map: Vec<usize>, instances: Vec<PipelineLayout> }
+impl PipelineLayoutInstances
+{
+	fn instantiate(engine: &GraphicsInterface, pipelines: &NamedContents<syntree::PipelineLayout>) -> Self
+	{
+		let mut sink = PipelineLayoutInstances { index_map: Vec::new(), instances: Vec::new() };
+
+		/*for (index, &syntree::PipelineLayout { ref descs, ref pushconstants }) in pipelines.iter().enumerate()
+		{
+
+		}*/
+
+		sink
 	}
 }

@@ -8,6 +8,7 @@ use std::collections::{HashMap, BTreeMap};
 use std::path::PathBuf;
 use interlude::ffi::*;
 use interlude::*;
+use parser::ParseError;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum OperationResult { Success, Failed(Cow<'static, str>) }
@@ -18,6 +19,19 @@ impl OperationResult
 	pub fn rewrap_err<F, R>(self, wrapper: F) -> Result<(), R> where F: FnOnce(Cow<'static, str>) -> R
 	{
 		if let OperationResult::Failed(n) = self { Err(wrapper(n)) } else { Ok(()) }
+	}
+}
+
+pub enum InsertionResult<'s> { Success, Duplicated(Cow<'s, str>) }
+impl<'s> InsertionResult<'s>
+{
+	pub fn into_parse_result(self) -> Result<(), ParseError>
+	{
+		match self
+		{
+			InsertionResult::Success => Ok(()),
+			InsertionResult::Duplicated(n) => Err(ParseError::EntryDuplicated(n.into_owned().into()))
+		}
 	}
 }
 
@@ -36,32 +50,21 @@ impl<T> Deref for NamedContents<T> { type Target = [T]; fn deref(&self) -> &[T] 
 impl<T> NamedContents<T>
 {
 	pub fn new() -> Self { NamedContents(HashMap::new(), Vec::new()) }
-	pub fn insert(&mut self, name: Cow<str>, value: T)
+
+	pub fn insert<'s>(&mut self, name: Cow<'s, str>, value: T) -> InsertionResult<'s>
 	{
-		let ref mut v = self.1;
-		*self.0.entry(name.into_owned()).or_insert_with(||
-		{
-			v.push(value);
-			v.len() - 1
-		});
+		if self.0.contains_key(name.deref()) { InsertionResult::Duplicated(name) }
+		else { let index = self.insert_unnamed(value); self.0.insert(name.into_owned(), index); InsertionResult::Success }
 	}
-	pub fn insert_unique(&mut self, name: Cow<str>, value: T) -> OperationResult
+	pub fn insert_unnamed(&mut self, value: T) -> usize
 	{
-		if self.0.contains_key(name.deref()) { OperationResult::Failed(format!("Duplicated Entry: {}", name).into()) }
-		else { self.1.push(value); self.0.insert(name.into_owned(), self.1.len() - 1); OperationResult::Success }
+		self.1.push(value); self.1.len() - 1
 	}
-	pub fn insert_unnamed(&mut self, value: T)
+	pub fn insert_auto<'s>(&mut self, name: Option<Cow<'s, str>>, value: T) -> InsertionResult<'s>
 	{
-		self.1.push(value);
+		if let Some(n) = name { self.insert(n, value) } else { self.insert_unnamed(value); InsertionResult::Success }
 	}
-	pub fn insert_auto(&mut self, name: Option<Cow<str>>, value: T)
-	{
-		if let Some(n) = name { self.insert(n, value) } else { self.insert_unnamed(value) }
-	}
-	pub fn insert_uniq_auto(&mut self, name: Option<Cow<str>>, value: T) -> OperationResult
-	{
-		if let Some(n) = name { self.insert_unique(n, value) } else { self.insert_unnamed(value); OperationResult::Success }
-	}
+
 	pub fn reverse_index(&self, k: &str) -> Option<usize>
 	{
 		self.0.get(k).cloned()
@@ -74,6 +77,23 @@ impl<T> NamedContents<T>
 			h.insert(x, n.as_ref());
 		}
 		h
+	}
+}
+impl<T: Eq> NamedContents<T>
+{
+	pub fn insert_vunique<'s>(&mut self, name: Cow<'s, str>, value: T) -> InsertionResult<'s>
+	{
+		if self.0.contains_key(name.deref()) { InsertionResult::Duplicated(name) }
+		else { let index = self.insert_unnamed_vunique(value); self.0.insert(name.into_owned(), index); InsertionResult::Success }
+	}
+	pub fn insert_unnamed_vunique(&mut self, value: T) -> usize
+	{
+		if let Some((i, _)) = self.1.iter().enumerate().find(|&(_, o)| *o == value) { i }
+		else { self.1.push(value); self.1.len() - 1 }
+	}
+	pub fn insert_auto_vunique<'s>(&mut self, name: Option<Cow<'s, str>>, value: T) -> InsertionResult<'s>
+	{
+		if let Some(n) = name { self.insert_vunique(n, value) } else { self.insert_unnamed_vunique(value); InsertionResult::Success }
 	}
 }
 
@@ -135,8 +155,8 @@ pub enum ImageDimension
 	/// 3D
 	Cubic
 }
-#[derive(Clone, Copy, PartialEq, Debug)] pub struct AccessFlags(pub VkAccessFlags);
-#[derive(Debug, PartialEq, Clone, Copy)] pub struct ShaderStageFlags(pub VkShaderStageFlags);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)] pub struct AccessFlags(pub VkAccessFlags);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)] pub struct ShaderStageFlags(pub VkShaderStageFlags);
 impl std::cmp::PartialEq<VkAccessFlags> for AccessFlags { fn eq(&self, t: &VkAccessFlags) -> bool { self.0 == *t } }
 impl std::cmp::PartialEq<VkShaderStageFlags> for ShaderStageFlags { fn eq(&self, t: &VkShaderStageFlags) -> bool { self.0 == *t } }
 
@@ -208,19 +228,19 @@ pub enum FramebufferStyle
 }
 #[derive(Debug, PartialEq)]
 pub struct FramebufferInfo { pub style: FramebufferStyle, pub views: Vec<LocationPacked<ConfigInt>> }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BufferDescriptorOption { None, TexelStore, DynamicOffset }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DescriptorEntryKind
 {
 	Sampler, CombinedSampler, SampledImage, StorageImage,
 	UniformBuffer(BufferDescriptorOption), StorageBuffer(BufferDescriptorOption), InputAttachment
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DescriptorEntry { pub kind: DescriptorEntryKind, pub count: usize, pub visibility: ShaderStageFlags }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DescriptorSetLayoutData { pub entries: Vec<DescriptorEntry> }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PushConstantLayout { pub range: Range<usize>, pub visibility: ShaderStageFlags }
 #[derive(Debug, PartialEq)]
 pub struct PipelineLayout { pub descs: Vec<LocationPacked<ConfigInt>>, pub pushconstants: Vec<LocationPacked<ConfigInt>> }
