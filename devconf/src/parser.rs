@@ -1,5 +1,6 @@
 //! Postludium: Device Configuration Processor: Parser
 
+use std;
 use std::ops::Range;
 use std::num::{ParseIntError, ParseFloatError};
 use std::collections::BTreeMap;
@@ -68,45 +69,51 @@ pub enum ParseError
 	UnknownDescriptorKind(usize),
 	BytesizeRequired(usize),
 	UnknownPrimitiveTopology(bool, usize),
-	NameNotAllowed(usize)
+	NameNotAllowed(usize),
+	EntryDuplicated(Cow<'static, str>)
 }
-trait DivergenceExt<T> { fn report_error(self, line: usize) -> T; }
-impl<T> DivergenceExt<T> for Result<T, ParseError>
+pub struct ParseErrorWithLine(ParseError, usize);
+trait WithLine<T, E> { fn with_line(self, line: usize) -> Result<T, E>; }
+impl<T> WithLine<T, ParseErrorWithLine> for Result<T, ParseError>
 {
-	fn report_error(self, line: usize) -> T
+	fn with_line(self, line: usize) -> Result<T, ParseErrorWithLine> { self.map_err(|e| ParseErrorWithLine(e, line)) }
+}
+impl std::fmt::Debug for ParseErrorWithLine
+{
+	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
 	{
-		match self
+		match &self.0
 		{
-			Ok(t) => t,
-			Err(ParseError::NameRequired(p)) => panic!("Name required following $ at line {}, col {}", line, p),
-			Err(ParseError::UnknownDeviceResource(p)) => panic!("Unknown Device Resource was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownFormat(p)) => panic!("Unknown Image Format was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownImageLayout(p)) => panic!("Unknown Image Layout was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownRenderPassAttachmentOptions(p)) => panic!("Unknown Options for RenderPass Attachment was found at line {}, col {}", line, p),
-			Err(ParseError::ImageLayoutRequired(p)) => panic!("Image Layout required at line {}, col {}", line, p),
-			Err(ParseError::DirectionRequired(p)) => panic!("Direction Token(->, <-, To or From) required at line {}, col {}", line, p),
-			Err(ParseError::DelimiterRequired(p)) => panic!("Delimiter required at line {}, col {}", line, p),
-			Err(ParseError::ClosingRequired(p)) => panic!("Closing required at line {}, col {}", line, p),
-			Err(ParseError::BytesizeRequired(p)) => panic!("Bytesize required at line {}, col {}", line, p),
-			Err(ParseError::DefinitionOverrided) => panic!("Multiple definitions are found at line {}", line),
-			Err(ParseError::CorruptedSubpassDesc(p)) => panic!("Some Error are found parsing SubpassDesc at line {}, col {}", line, p),
-			Err(ParseError::IntValueRequired(p)) => panic!("Integer or ConfigRef required at line {}, col {}", line, p),
-			Err(ParseError::UnknownPipelineStageFlag(p)) => panic!("Unknown Pipeline Stage Flag was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownAccessFlag(p)) => panic!("Unknown Access Mask Flag was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownExternalResource(p)) => panic!("Unknown External Resource was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownClearMode(p)) => panic!("Unknown Clear Mode was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownShaderStageFlag(p)) => panic!("Unknown Shader Stage Flag was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownDescriptorKind(p)) => panic!("Unknown Descriptor Kind was found at line {}, col {}", line, p),
-			Err(ParseError::FormatRequired(p)) => panic!("Format required for RenderPass Attachment at line {}, col {}", line, p),
-			Err(ParseError::UnknownPrimitiveTopology(true, p)) => panic!("Unknown Primitive Topology with Adjacency was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownPrimitiveTopology(false, p)) => panic!("Unknown Primitive Topology was found at line {}, col {}", line, p),
-			Err(ParseError::UnknownObjectRef(n, p)) => panic!("Unknown {} ref at line {}, col {}", n, line, p),
-			Err(ParseError::NumericParseError(n, p)) => panic!("NumericParseError: {} at line {}, col {}", n, line, p),
-			Err(ParseError::FloatingParseError(n, p)) => panic!("FloatingParseError: {} at line {}, col {}", n, line, p),
-			Err(ParseError::Expected(s, p)) => panic!("Expected {}, but it was not found at line {}, col {}", s, line, p),
-			Err(ParseError::UnknownConfig(s)) => panic!("Unknown Config for {} was found at line {}", s, line),
-			Err(ParseError::ConfigRequired(c)) => panic!("Configuration \"{}\" required at line {}", c, line),
-			Err(ParseError::NameNotAllowed(p)) => panic!("Naming not allowed for the configuration at line {}, col {}", line, p)
+			&ParseError::NameRequired(p) => write!(fmt, "Name required following $ at line {}, col {}", self.1, p),
+			&ParseError::UnknownDeviceResource(p) => write!(fmt, "Unknown Device Resource was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownFormat(p) => write!(fmt, "Unknown Image Format was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownImageLayout(p) => write!(fmt, "Unknown Image Layout was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownRenderPassAttachmentOptions(p) => write!(fmt, "Unknown Options for RenderPass Attachment was found at line {}, col {}", self.1, p),
+			&ParseError::ImageLayoutRequired(p) => write!(fmt, "Image Layout required at line {}, col {}", self.1, p),
+			&ParseError::DirectionRequired(p) => write!(fmt, "Direction Token(->, <-, To or From) required at line {}, col {}", self.1, p),
+			&ParseError::DelimiterRequired(p) => write!(fmt, "Delimiter required at line {}, col {}", self.1, p),
+			&ParseError::ClosingRequired(p) => write!(fmt, "Closing required at line {}, col {}", self.1, p),
+			&ParseError::BytesizeRequired(p) => write!(fmt, "Bytesize required at line {}, col {}", self.1, p),
+			&ParseError::DefinitionOverrided => write!(fmt, "Multiple definitions are found at line {}", self.1),
+			&ParseError::CorruptedSubpassDesc(p) => write!(fmt, "Some Error are found parsing SubpassDesc at line {}, col {}", self.1, p),
+			&ParseError::IntValueRequired(p) => write!(fmt, "Integer or ConfigRef required at line {}, col {}", self.1, p),
+			&ParseError::UnknownPipelineStageFlag(p) => write!(fmt, "Unknown Pipeline Stage Flag was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownAccessFlag(p) => write!(fmt, "Unknown Access Mask Flag was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownExternalResource(p) => write!(fmt, "Unknown External Resource was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownClearMode(p) => write!(fmt, "Unknown Clear Mode was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownShaderStageFlag(p) => write!(fmt, "Unknown Shader Stage Flag was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownDescriptorKind(p) => write!(fmt, "Unknown Descriptor Kind was found at line {}, col {}", self.1, p),
+			&ParseError::FormatRequired(p) => write!(fmt, "Format required for RenderPass Attachment at line {}, col {}", self.1, p),
+			&ParseError::UnknownPrimitiveTopology(true, p) => write!(fmt, "Unknown Primitive Topology with Adjacency was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownPrimitiveTopology(false, p) => write!(fmt, "Unknown Primitive Topology was found at line {}, col {}", self.1, p),
+			&ParseError::UnknownObjectRef(n, p) => write!(fmt, "Unknown {} ref at line {}, col {}", n, self.1, p),
+			&ParseError::NumericParseError(ref n, p) => write!(fmt, "NumericParseError: {} at line {}, col {}", n, self.1, p),
+			&ParseError::FloatingParseError(ref n, p) => write!(fmt, "FloatingParseError: {} at line {}, col {}", n, self.1, p),
+			&ParseError::Expected(ref s, p) => write!(fmt, "Expected {}, but it was not found at line {}, col {}", s, self.1, p),
+			&ParseError::UnknownConfig(s) => write!(fmt, "Unknown Config for {} was found at line {}", s, self.1),
+			&ParseError::ConfigRequired(c) => write!(fmt, "Configuration \"{}\" required at line {}", c, self.1),
+			&ParseError::NameNotAllowed(p) => write!(fmt, "Naming not allowed for the configuration at line {}, col {}", self.1, p),
+			&ParseError::EntryDuplicated(ref n) => write!(fmt, "Entry {} is duplicated at line {}", n, self.1)
 		}
 	}
 }
@@ -118,10 +125,10 @@ pub trait FromSource : Sized
 	fn object_name() -> Cow<'static, str>;
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>;
 }
-/// The structure that can be constructed by lines, panics if there are some errors.
+/// The structure that can be constructed by lines, writes fmt, if there are some errors.
 pub trait FromSourceBlock : Sized
 {
-	fn parse(enterline: &mut ParseLine, lines: &mut LazyLines) -> Self;
+	fn parse(enterline: &mut ParseLine, lines: &mut LazyLines) -> Result<Self, ParseErrorWithLine>;
 }
 /// The array that can be constructed with some structures, returns error when it is found.
 pub trait FromSourceArray : FromSource
@@ -167,7 +174,7 @@ pub trait ParserExt: Sized
 }
 impl<'s> ParserExt for ParseLine<'s>
 {
-	fn location(&self) -> Location { Location(self.line(), self.current()) }
+	fn location(&self) -> Location { Location(self.line(), self.current() + 1) }
 	fn consume<CF, E, F, R>(&mut self, consumer: CF, expect_msg: E, cont: F) -> Result<R, ParseError>
 		where CF: FnOnce(&mut Self) -> bool, E: FnOnce() -> Cow<'static, str>, F: FnOnce(&mut Self) -> Result<R, ParseError>
 	{
@@ -205,6 +212,8 @@ pub trait CombinedParser
 	fn array_loc<PA: FromSourceArrayLocated>(&mut self) -> Result<Vec<LocationPacked<PA>>, ParseError>;
 	/// P "-" P
 	fn ranged<P: FromSource>(&mut self) -> Result<Range<P>, ParseError>;
+	/// B
+	fn block<B: FromSourceBlock>(&mut self, lines: &mut LazyLines) -> Result<B, ParseErrorWithLine>;
 }
 impl<'s> CombinedParser for ParseLine<'s>
 {
@@ -220,6 +229,10 @@ impl<'s> CombinedParser for ParseLine<'s>
 			Some('-') => P::parse(self.drop_opt(1).drop_while(ignore_chars)).map(|e| s .. e),
 			_ => Err(ParseError::Expected("\"-\"".into(), self.current()))
 		})
+	}
+	fn block<B: FromSourceBlock>(&mut self, lines: &mut LazyLines) -> Result<B, ParseErrorWithLine>
+	{
+		B::parse(self, lines)
 	}
 }
 
@@ -394,72 +407,60 @@ impl FromSource for Offset2
 }
 
 pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut Vec<LocationPacked<PathBuf>>, lines: &mut LazyLines)
+	-> Result<(), ParseErrorWithLine>
 {
 	while let Some(mut source) = acquire_line(lines, 0)
 	{
 		let insource = source.current();
-		let NamedConfigLine { name, .. } = NamedConfigLine::parse_noargs(&mut source).report_error(source.line());
+		let NamedConfigLine { name, .. } = NamedConfigLine::parse_noargs(&mut source).with_line(source.line())?;
 		let name = name.map(From::from);
 		let s = source.drop_while(ignore_chars).take_until(ident_break);
+		let sline = source.line();
+		fn insert_uniq_auto_or<T>(target: &mut NamedContents<T>, name: Option<Cow<str>>, value: T, eline: usize) -> Result<(), ParseErrorWithLine>
+		{
+			target.insert_uniq_auto(name, value).rewrap_err(|n| ParseErrorWithLine(ParseError::EntryDuplicated(n), eline))
+		}
 		match s.clone_as_string().as_ref()
 		{
 			/// Include <StringLiteral>
 			"Include" => source.drop_while(ignore_chars).parse::<StringLiteral>().map(PartialApply1!(LocationPacked::apply; From::from))
-				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(includes.push(p)) }).report_error(source.line()),
-			"RenderPass" =>
-				Let(RenderPassData::parse(&mut source, lines))._in(|p| sink.renderpasses.insert_uniq_auto(name, p)).report_error(source.line()),
-			"SimpleRenderPass" =>
-				Let(SimpleRenderPassData::parse(&mut source, lines))._in(|p| sink.simple_rps.insert_uniq_auto(name, p)).report_error(source.line()),
-			"PresentedRenderPass" =>
-				Let(PresentedRenderPassData::parse(&mut source, lines))._in(|p| sink.presented_rps.insert_uniq_auto(name, p)).report_error(source.line()),
-			"DescriptorSetLayout" =>
-				Let(DescriptorSetLayoutData::parse(&mut source, lines))._in(|p| sink.descriptor_set_layouts.insert_uniq_auto(name, p)).report_error(source.line()),
-			"PushConstantLayout" =>
-				Let(PushConstantLayout::parse(&mut source, lines))._in(|p| sink.push_constant_layouts.insert_uniq_auto(name, p)).report_error(source.line()),
-			"PipelineLayout" =>
-				Let(PipelineLayout::parse(&mut source, lines))._in(|p| sink.pipeline_layouts.insert_uniq_auto(name, p)).report_error(source.line()),
-			"DescriptorSets" =>
-				Let(DescriptorSetsInfo::parse(&mut source, lines))._in(|p| sink.descriptor_sets.insert_uniq_auto(name, p)).report_error(source.line()),
-			"PipelineState" =>
-				Let(PipelineStateInfo::parse(source.drop_while(ignore_chars), lines))._in(|p| sink.pipeline_states.insert_uniq_auto(name, p)).report_error(source.line()),
-			"Extern" =>
-				Let(source.drop_while(ignore_chars).parse::<ExternalResourceData>().report_error(source.line()))
-					._in(|p| sink.externs.insert_uniq_auto(name, p)).report_error(source.line()),
-			"Framebuffer" =>
-				Let(FramebufferInfo::parse(source.drop_while(ignore_chars), lines))._in(|p| sink.framebuffers.insert_uniq_auto(name, p)).report_error(source.line()),
-			"VertexShader" =>
-			{
-				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
-				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_VERTEX_BIT, asset: asset, consts: consts };
-				sink.ind_shaders.vertex.insert_uniq_auto(name, ss).report_error(source.line())
-			},
-			"FragmentShader" =>
-			{
-				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
-				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_FRAGMENT_BIT, asset: asset, consts: consts };
-				sink.ind_shaders.fragment.insert_uniq_auto(name, ss).report_error(source.line())
-			},
-			"GeometryShader" =>
-			{
-				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
-				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_GEOMETRY_BIT, asset: asset, consts: consts };
-				sink.ind_shaders.geometry.insert_uniq_auto(name, ss).report_error(source.line())
-			},
-			"TessellationControlShader" | "TessControlShader" =>
-			{
-				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
-				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, asset: asset, consts: consts };
-				sink.ind_shaders.tesscontrol.insert_uniq_auto(name, ss).report_error(source.line())
-			},
-			"TessellationEvaluationShader" | "TessEvaluationShader" =>
-			{
-				let PipelineShaderStageInfo { asset, consts } = PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0);
-				let ss = IndependentPipelineShaderStageInfo { stage: VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT, asset: asset, consts: consts };
-				sink.ind_shaders.tessevaluation.insert_uniq_auto(name, ss).report_error(source.line())
-			},
-			_ => Err(ParseError::UnknownDeviceResource(s.current())).report_error(source.line())
-		}
+				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(includes.push(p)) }).with_line(sline),
+			"RenderPass" => source.block::<RenderPassData>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.renderpasses, name, p, sline)),
+			"SimpleRenderPass" => source.block::<SimpleRenderPassData>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.simple_rps, name, p, sline)),
+			"PresentedRenderPass" => source.block::<PresentedRenderPassData>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.presented_rps, name, p, sline)),
+			"DescriptorSetLayout" => source.block::<DescriptorSetLayoutData>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.descriptor_set_layouts, name, p, sline)),
+			"PushConstantLayout" => source.block::<PushConstantLayout>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.push_constant_layouts, name, p, sline)),
+			"PipelineLayout" => source.block::<PipelineLayout>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_layouts, name, p, sline)),
+			"DescriptorSets" => source.block::<DescriptorSetsInfo>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.descriptor_sets, name, p, sline)),
+			"PipelineState" => source.drop_while(ignore_chars).block::<PipelineStateInfo>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_states, name, p, sline)),
+			"Extern" => source.drop_while(ignore_chars).parse::<ExternalResourceData>().with_line(sline)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.externs, name, p, sline)),
+			"Framebuffer" => source.drop_while(ignore_chars).block::<FramebufferInfo>(lines)
+				.and_then(|p| insert_uniq_auto_or(&mut sink.framebuffers, name, p, sline)),
+			"VertexShader" => VertexShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
+				.and_then(|vsinfo| insert_uniq_auto_or(&mut sink.ind_shaders.vertex, name, vsinfo, sline)),
+			"FragmentShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
+				.and_then(|f| insert_uniq_auto_or(&mut sink.ind_shaders.fragment, name, IndependentShaderStageInfo::from_pss(f, VK_SHADER_STAGE_FRAGMENT_BIT), sline)),
+			"GeometryShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
+				.and_then(|g| insert_uniq_auto_or(&mut sink.ind_shaders.geometry, name, IndependentShaderStageInfo::from_pss(g, VK_SHADER_STAGE_GEOMETRY_BIT), sline)),
+			"TessellationControlShader" | "TessControlShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
+				.map(|tc| IndependentShaderStageInfo::from_pss(tc, VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT))
+				.and_then(|tc| insert_uniq_auto_or(&mut sink.ind_shaders.tesscontrol, name, tc, sline)),
+			"TessellationEvaluationShader" | "TessEvaluationShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
+				.map(|te| IndependentShaderStageInfo::from_pss(te, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT))
+				.and_then(|te| insert_uniq_auto_or(&mut sink.ind_shaders.tessevaluation, name, te, sline)),
+			_ => Err(ParseError::UnknownDeviceResource(s.current())).with_line(sline)
+		}?
 	}
+	Ok(())
 }
 impl FromSource for ImageDimension
 {
@@ -501,47 +502,47 @@ lazy_static!
 }
 impl FromSourceBlock for RenderPassData
 {
-	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let mut rpd = RenderPassData { attachments: NamedContents::new(), subpasses: NamedContents::new(), deps: Vec::new() };
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			acquire_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+			acquire_config_name(&mut s).with_line(s.line()).and_then(|name| PartialEqualityMatchMap!(name;
 			{
-				ATTACHMENTS[..] => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided) }
+				ATTACHMENTS[..] => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).with_line(s.line()) }
 				else
 				{
 					while let Some(mut s) = acquire_line(source, 2)
 					{
-						let l = NamedConfigLine::parse(&mut s, RPAttachment::parse).report_error(s.line());
-						rpd.attachments.insert_uniq_auto(l.name.map(From::from), l.config).report_error(s.line());
+						let l = NamedConfigLine::parse(&mut s, RPAttachment::parse).with_line(s.line())?;
+						rpd.attachments.insert_uniq_auto(l.name.map(From::from), l.config).rewrap_err(|n| ParseErrorWithLine(ParseError::EntryDuplicated(n), s.line()))?;
 					}
 					Ok(())
 				},
-				SUBPASSES[..] => if !rpd.subpasses.is_empty() { Err(ParseError::DefinitionOverrided) }
+				SUBPASSES[..] => if !rpd.subpasses.is_empty() { Err(ParseError::DefinitionOverrided).with_line(s.line()) }
 				else
 				{
 					while let Some(mut s) = acquire_line(source, 2)
 					{
-						let l = NamedConfigLine::parse(&mut s, RPSubpassDesc::parse).report_error(s.line());
-						rpd.subpasses.insert_uniq_auto(l.name.map(From::from), l.config).report_error(s.line());
+						let l = NamedConfigLine::parse(&mut s, RPSubpassDesc::parse).with_line(s.line())?;
+						rpd.subpasses.insert_uniq_auto(l.name.map(From::from), l.config).rewrap_err(|n| ParseErrorWithLine(ParseError::EntryDuplicated(n), s.line()))?;
 					}
 					Ok(())
 				},
-				DEPENDENCIES[..] => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided) }
+				DEPENDENCIES[..] => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).with_line(s.line()) }
 				else
 				{
 					while let Some(mut s) = acquire_line(source, 2)
 					{
-						let dep = s.parse::<RPSubpassDeps>().report_error(s.line());
+						let dep = s.parse::<RPSubpassDeps>().with_line(s.line())?;
 						rpd.deps.push(dep);
 					}
 					Ok(())
 				};
-				_ => Err(ParseError::UnknownConfig("RenderPass"))
-			})).report_error(s.line());
+				_ => Err(ParseError::UnknownConfig("RenderPass")).with_line(s.line())
+			}))?
 		}
-		rpd
+		Ok(rpd)
 	}
 }
 lazy_static!
@@ -670,7 +671,7 @@ lazy_static!
 }
 impl FromSourceBlock for SimpleRenderPassData
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> SimpleRenderPassData
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<SimpleRenderPassData, ParseErrorWithLine>
 	{
 		let (mut fmt, mut clear_mode) = (None, None);
 		while let Some(mut s) = acquire_line(source, 1)
@@ -680,15 +681,15 @@ impl FromSourceBlock for SimpleRenderPassData
 				FORMAT[..] => s.drop_while(ignore_chars).parse_loc::<Format>().and_then(|f| assign_check_overriding(&mut fmt, f)),
 				CLEARMODE[..] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () });
 				_ => Err(ParseError::UnknownConfig("SimpleRenderPass"))
-			})).report_error(s.line());
+			})).with_line(s.line())?;
 		}
 		fmt.ok_or(ParseError::ConfigRequired("Format")).map(|fmt| SimpleRenderPassData { format: fmt, clear_on_load: clear_mode })
-			.report_error(enterline.line())
+			.with_line(enterline.line())
 	}
 }
 impl FromSourceBlock for PresentedRenderPassData
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let (mut fmt, mut clear_mode) = (None, None);
 		while let Some(mut s) = acquire_line(source, 1)
@@ -698,10 +699,10 @@ impl FromSourceBlock for PresentedRenderPassData
 				FORMAT[..] => s.drop_while(ignore_chars).parse_loc::<Format>().and_then(|f| assign_check_overriding(&mut fmt, f)),
 				CLEARMODE[..] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () });
 				_ => Err(ParseError::UnknownConfig("PresentedRenderPass"))
-			})).report_error(s.line());
+			})).with_line(s.line())?;
 		}
 		fmt.ok_or(ParseError::ConfigRequired("Format")).map(|fmt| PresentedRenderPassData { format: fmt, clear_on_load: clear_mode })
-			.report_error(enterline.line())
+			.with_line(enterline.line())
 	}
 }
 lazy_static! { static ref PRESENTED: Vec<char> = "Presented".chars().collect(); }
@@ -731,10 +732,10 @@ impl FromSource for FramebufferRenderPassRef
 }
 impl FromSourceBlock for FramebufferInfo
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
-		let arg = enterline.drop_while(ignore_chars).parse::<FramebufferRenderPassRef>().report_error(enterline.line());
-		let vs = enterline.drop_while(ignore_chars).array_loc::<ConfigInt>().report_error(enterline.line());
+		let arg = enterline.drop_while(ignore_chars).parse::<FramebufferRenderPassRef>().with_line(enterline.line())?;
+		let vs = enterline.drop_while(ignore_chars).array_loc::<ConfigInt>().with_line(enterline.line())?;
 		
 		let mut clear_mode = None;
 		while let Some(mut s) = acquire_line(source, 1)
@@ -742,7 +743,7 @@ impl FromSourceBlock for FramebufferInfo
 			acquire_config_name(s.drop_while(ignore_chars)).and_then(|name|
 				if name == CLEARMODE[..] { parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }) }
 				else { Err(ParseError::UnknownConfig("Framebuffer")) }
-			).report_error(s.line());
+			).with_line(s.line())?;
 		}
 		let style = match arg
 		{
@@ -750,19 +751,19 @@ impl FromSourceBlock for FramebufferInfo
 			FramebufferRenderPassRef::Presented => FramebufferStyle::Presented(clear_mode),
 			FramebufferRenderPassRef::None => FramebufferStyle::Simple(clear_mode)
 		};
-		FramebufferInfo { style: style, views: vs }
+		Ok(FramebufferInfo { style: style, views: vs })
 	}
 }
 impl FromSourceBlock for DescriptorSetLayoutData
 {
-	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let mut entries = Vec::new();
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			entries.push(s.parse::<DescriptorEntry>().report_error(s.line()));
+			entries.push(s.parse::<DescriptorEntry>().with_line(s.line())?);
 		}
-		DescriptorSetLayoutData { entries: entries }
+		Ok(DescriptorSetLayoutData { entries: entries })
 	}
 }
 impl FromSource for DescriptorEntryKind
@@ -816,7 +817,7 @@ lazy_static!
 }
 impl FromSourceBlock for PushConstantLayout
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let (mut range, mut vis) = (None, None);
 		while let Some(mut s) = acquire_line(source, 1)
@@ -826,11 +827,11 @@ impl FromSourceBlock for PushConstantLayout
 				RANGE[..] => s.drop_while(ignore_chars).ranged::<usize>().and_then(|r| assign_check_overriding(&mut range, r)),
 				VISIBILITY[..] => s.drop_while(ignore_chars).parse::<ShaderStageFlags>().and_then(|v| assign_check_overriding(&mut vis, v));
 				_ => Err(ParseError::UnknownConfig("PushConstantLayout"))
-			})).report_error(s.line());
+			})).with_line(s.line())?;
 		}
-		let range = range.ok_or(ParseError::ConfigRequired("Range")).report_error(enterline.line());
-		let visibility = vis.ok_or(ParseError::ConfigRequired("Visibility")).report_error(enterline.line());
-		PushConstantLayout { range: range, visibility: visibility }
+		let range = range.ok_or(ParseError::ConfigRequired("Range")).with_line(enterline.line())?;
+		let visibility = vis.ok_or(ParseError::ConfigRequired("Visibility")).with_line(enterline.line())?;
+		Ok(PushConstantLayout { range: range, visibility: visibility })
 	}
 }
 lazy_static!
@@ -840,7 +841,7 @@ lazy_static!
 }
 impl FromSourceBlock for PipelineLayout
 {
-	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let (mut desc, mut pcls) = (Vec::new(), Vec::new());
 		while let Some(mut s) = acquire_line(source, 1)
@@ -851,33 +852,33 @@ impl FromSourceBlock for PipelineLayout
 				DESCRIPTORS[..] => s.drop_while(ignore_chars).array_loc::<ConfigInt>().and_then(|cv| vassign_check_overriding(&mut desc, cv)),
 				PUSHCONSTANTLAYOUTS[..] => s.drop_while(ignore_chars).array_loc::<ConfigInt>().and_then(|cv| vassign_check_overriding(&mut pcls, cv));
 				_ => Err(ParseError::UnknownConfig("PipelineLayout"))
-			})).report_error(s.line());
+			})).with_line(s.line())?;
 		}
-		PipelineLayout { descs: desc, pushconstants: pcls }
+		Ok(PipelineLayout { descs: desc, pushconstants: pcls })
 	}
 }
 impl FromSourceBlock for DescriptorSetsInfo
 {
-	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let mut entries = Vec::new();
 		while let Some(mut s) = acquire_line(source, 1)
 		{
 			/// - [$Name :] $Name
 			let l = NamedConfigLine::parse(&mut s, ConfigInt::parse_with_location)
-				.map(|l| DescriptorSetEntry { name: l.name, layout: l.config }).report_error(s.line());
+				.map(|l| DescriptorSetEntry { name: l.name, layout: l.config }).with_line(s.line())?;
 			entries.push(l);
 		}
-		DescriptorSetsInfo(entries)
+		Ok(DescriptorSetsInfo(entries))
 	}
 }
 impl FromSourceBlock for PipelineStateInfo
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		/// PipelineState | "for" precise_rpref "with" int
-		let r = enterline.consume(for_token, || "\"for\"".into(), |s| s.drop_while(ignore_chars).parse::<PreciseRenderPassRef>()).report_error(enterline.line());
-		let l = enterline.consume(with_token, || "\"with\"".into(), |s| s.drop_while(ignore_chars).parse_loc::<ConfigInt>()).report_error(enterline.line());
+		let r = enterline.consume(for_token, || "\"for\"".into(), |s| s.drop_while(ignore_chars).parse::<PreciseRenderPassRef>()).with_line(enterline.line())?;
+		let l = enterline.consume(with_token, || "\"with\"".into(), |s| s.drop_while(ignore_chars).parse_loc::<ConfigInt>()).with_line(enterline.line())?;
 
 		struct ShaderInfos
 		{
@@ -889,38 +890,45 @@ impl FromSourceBlock for PipelineStateInfo
 		let (mut primt, mut vpsc, mut blends) = (None, Vec::new(), Vec::new());
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			acquire_config_name(&mut s).and_then(|name| match name.clone_as_string().as_ref()
+			acquire_config_name(&mut s).with_line(s.line()).and_then(|name| match name.clone_as_string().as_ref()
 			{
-				"VertexShader" =>
-					assign_check_overriding(&mut vsinfo, VertexShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
-				"FragmentShader" =>
-					assign_check_overriding(&mut shaderinfo.fragment, PipelineShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
-				"GeometryShader" =>
-					assign_check_overriding(&mut shaderinfo.geometry, PipelineShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
-				"TessellationControlShader" =>
-					assign_check_overriding(&mut shaderinfo.tesscontrol, PipelineShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
-				"TessellationEvaluationShader" =>
-					assign_check_overriding(&mut shaderinfo.tessevaluation, PipelineShaderStageInfo::parse(s.drop_while(ignore_chars), source)),
-				"PrimitiveTopology" => s.drop_while(ignore_chars).parse::<VkPrimitiveTopology>().and_then(|p| assign_check_overriding(&mut primt, p)),
-				"ViewportScissors" => parse_viewport_scissors(s.drop_while(ignore_chars), source).and_then(|v| vassign_check_overriding(&mut vpsc, v)),
-				"BlendStates" => AttachmentBlendState::parse_array(s.drop_while(ignore_chars)).and_then(|v| vassign_check_overriding(&mut blends, v)),
-				_ => Err(ParseError::UnknownConfig("PipelineState"))
-			}).report_error(s.line());
+				"VertexShader" => s.drop_while(ignore_chars).block::<VertexShaderStageInfo>(source)
+					.and_then(|sh| assign_check_overriding(&mut vsinfo, sh).with_line(s.line())),
+				"FragmentShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
+					.and_then(|sh| assign_check_overriding(&mut shaderinfo.fragment, sh).with_line(s.line())),
+				"GeometryShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
+					.and_then(|sh| assign_check_overriding(&mut shaderinfo.geometry, sh).with_line(s.line())),
+				"TessellationControlShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
+					.and_then(|sh| assign_check_overriding(&mut shaderinfo.tesscontrol, sh).with_line(s.line())),
+				"TessellationEvaluationShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
+					.and_then(|sh| assign_check_overriding(&mut shaderinfo.tessevaluation, sh).with_line(s.line())),
+				"PrimitiveTopology" => s.drop_while(ignore_chars).parse::<VkPrimitiveTopology>().and_then(|p| assign_check_overriding(&mut primt, p)).with_line(s.line()),
+				"ViewportScissors" => parse_viewport_scissors(s.drop_while(ignore_chars), source).and_then(|v| vassign_check_overriding(&mut vpsc, v)).with_line(s.line()),
+				"BlendStates" => AttachmentBlendState::parse_array(s.drop_while(ignore_chars)).and_then(|v| vassign_check_overriding(&mut blends, v)).with_line(s.line()),
+				_ => Err(ParseErrorWithLine(ParseError::UnknownConfig("PipelineState"), s.line()))
+			})?;
 		}
-		let vsinfo = vsinfo.ok_or(ParseError::ConfigRequired("VertexShader")).report_error(enterline.line());
-		let primt = primt.ok_or(ParseError::ConfigRequired("PrimitiveTopology")).report_error(enterline.line());
-		PipelineStateInfo
+		let vsinfo = vsinfo.ok_or(ParseError::ConfigRequired("VertexShader")).with_line(enterline.line())?;
+		let primt = primt.ok_or(ParseError::ConfigRequired("PrimitiveTopology")).with_line(enterline.line())?;
+		Ok(PipelineStateInfo
 		{
 			renderpass: r, layout_ref: l,
 			vertex_shader: vsinfo, fragment_shader: shaderinfo.fragment, geometry_shader: shaderinfo.geometry,
 			tesscontrol_shader: shaderinfo.tesscontrol, tessevaluation_shader: shaderinfo.tessevaluation,
 			primitive_topology: primt, viewport_scissors: vpsc, blendstates: blends
-		}
+		})
 	}
 }
 impl FromSourceBlock for PipelineShaderStageInfo
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
+	{
+		Self::parse_baseindent(enterline, source, 1)
+	}
+}
+impl FromSourceBlock for VertexShaderStageInfo
+{
+	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		Self::parse_baseindent(enterline, source, 1)
 	}
@@ -963,15 +971,15 @@ fn sequence4<F, R, F2, R2, F3, R3, F4, R4, E>(c: &mut ParseLine, f1: F, f2: F2, 
 	f1(c).and_then(|x1| f2(c).and_then(|x2| f3(c).and_then(|x3| f4(c).map(|x4| (x1, x2, x3, x4)))))
 }
 impl FromSourceArray for StreamBindingDesc {}
-impl FromSourceBlock for VertexShaderStageInfo
+impl VertexShaderStageInfo
 {
-	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Self
+	fn parse_baseindent(enterline: &mut ParseLine, source: &mut LazyLines, baseindent: usize) -> Result<Self, ParseErrorWithLine>
 	{
 		/// VertexShader | AssetResource
-		let asset = enterline.parse_loc::<AssetResource>().report_error(enterline.line());
+		let asset = enterline.parse_loc::<AssetResource>().with_line(enterline.line())?;
 
 		let (mut consts, mut bindings, mut inputs) = (BTreeMap::new(), Vec::new(), BTreeMap::new());
-		while let Some(mut s) = acquire_line(source, 1)
+		while let Some(mut s) = acquire_line(source, baseindent + 1)
 		{
 			if s.starts_with(&CONSTANT)
 			{
@@ -1001,16 +1009,16 @@ impl FromSourceBlock for VertexShaderStageInfo
 					|s| s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| s.drop_while(ignore_chars).parse::<Format>())
 				).map(|(binding, offset, index, format)| { inputs.insert(index, VertexInputInfo { binding, offset, format }); })
 			}
-			else { Err(ParseError::UnknownConfig("Vertex Shader Module")) }.report_error(s.line());
+			else { Err(ParseError::UnknownConfig("Vertex Shader Module")) }.with_line(s.line())?;
 		}
-		VertexShaderStageInfo { asset: asset, consts: consts, stream_bindings: bindings, inputs: inputs }
+		Ok(VertexShaderStageInfo { asset: asset, consts: consts, stream_bindings: bindings, inputs: inputs })
 	}
 }
 impl PipelineShaderStageInfo
 {
-	fn parse_baseindent(enterline: &mut ParseLine, source: &mut LazyLines, baseindent: usize) -> Self
+	fn parse_baseindent(enterline: &mut ParseLine, source: &mut LazyLines, baseindent: usize) -> Result<Self, ParseErrorWithLine>
 	{
-		let asset = enterline.parse_loc::<AssetResource>().report_error(enterline.line());
+		let asset = enterline.parse_loc::<AssetResource>().with_line(enterline.line())?;
 
 		let mut consts = BTreeMap::new();
 		while let Some(mut s) = acquire_line(source, baseindent + 1)
@@ -1023,9 +1031,9 @@ impl PipelineShaderStageInfo
 					|s| s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
 				).map(|(index, value)| { consts.insert(index, value); })
 			}
-			else { Err(ParseError::UnknownConfig("Shader Module")) }.report_error(s.line());
+			else { Err(ParseError::UnknownConfig("Shader Module")) }.with_line(s.line())?;
 		}
-		PipelineShaderStageInfo { asset: asset, consts: consts }
+		Ok(PipelineShaderStageInfo { asset: asset, consts: consts })
 	}
 }
 impl FromSource for VkPrimitiveTopology
@@ -1071,7 +1079,7 @@ fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> R
 		// Descending
 		while let Some(mut s) = acquire_line(source, 2)
 		{
-			v.push(ViewportScissorEntry::parse(&mut s).report_error(s.line()));
+			v.push(ViewportScissorEntry::parse(&mut s)?);
 		}
 		Ok(v)
 	}

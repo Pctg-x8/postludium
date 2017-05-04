@@ -37,24 +37,28 @@ pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(en
 	fn shader_insert_dupcheck<F, SM>(assets: &mut LoadedAssets, err: &mut ErrorReporter, loc: &Location, name: String, loader: F)
 		where F: FnOnce() -> EngineResult<SM>, SM: ClassifiedShaderModuleConst + 'static
 	{
-		if let Some(loaded) = assets.shaders.get(&name)
+		let duplication_detected = if let Some(loaded) = assets.shaders.get(&name)
 		{
 			if SM::STAGE != loaded.stage()
 			{
-				err.error(format!("Asset {} has loaded with different shader stage({})", name, loaded.stage()), loc);
+				err.error(format!("Shader Asset {} has already loaded with different shader stage({})", name, loaded.stage()), loc);
 			}
-			return;
+			true
 		}
+		else { false };
 
-		match loader()
+		if !duplication_detected
 		{
-			Ok(b) => { assets.shaders.insert(name, box b); },
-			Err(e) => err.error(format!("Failed to load asset {}: {:?}", name, e), loc)
+			match loader()
+			{
+				Ok(b) => { assets.shaders.insert(name, box b); },
+				Err(e) => err.error(format!("Failed to load asset {}: {:?}", name, e), loc)
+			}
 		}
 	}
 	let mut assets = LoadedAssets { shaders: HashMap::new(), pipeline_shaders: NamedContents::new() };
 
-	fn load_assets_impl<E, C, SM>(sink: &mut LoadedAssets, parsed_assets: &NamedContents<IndependentPipelineShaderStageInfo>, err: &mut ErrorReporter, engine: &E, constructor: C)
+	fn load_assets_impl<E, C, SM>(sink: &mut LoadedAssets, parsed_assets: &NamedContents<IndependentShaderStageInfo>, err: &mut ErrorReporter, engine: &E, constructor: C)
 		where E: AssetProvider + Deref<Target = GraphicsInterface>, C: Fn(ShaderModule) -> SM, SM: ClassifiedShaderModuleConst + 'static
 	{
 		for s in parsed_assets.iter()
@@ -66,31 +70,18 @@ pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(en
 			}
 		}
 	}
-	load_assets_impl(&mut assets, &source.ind_shaders.vertex, err, engine, VertexShaderModule);
+	for &VertexShaderStageInfo { asset: LocationPacked(ref loc, ref ares), .. } in source.ind_shaders.vertex.iter()
+	{
+		if let &AssetResource::PathRef(ref path) = ares
+		{
+			let asset_refkey = path.join(".");
+			shader_insert_dupcheck(&mut assets, err, loc, asset_refkey, || ShaderModule::from_asset(engine, path).map(VertexShaderModule));
+		}
+	}
 	load_assets_impl(&mut assets, &source.ind_shaders.fragment, err, engine, FragmentShaderModule);
 	load_assets_impl(&mut assets, &source.ind_shaders.geometry, err, engine, GeometryShaderModule);
 	load_assets_impl(&mut assets, &source.ind_shaders.tesscontrol, err, engine, TessControlShaderModule);
 	load_assets_impl(&mut assets, &source.ind_shaders.tessevaluation, err, engine, TessEvaluationShaderModule);
-	
-	/*
-	for ind_shader in source.ind_shaders.iter()
-	{
-		if let &LocationPacked(l, c, AssetResource::PathRef(ref path)) = &ind_shader.asset
-		{
-			let asset_refkey = path.join(".");
-			if let Err(asset_refkey) = match ind_shader.stage
-			{
-				VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT =>
-					shader_insert_dupcheck(&mut assets, asset_refkey, TessellationControlShader::from_asset(engine, path, "main").unwrap()),
-				VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT =>
-					shader_insert_dupcheck(&mut assets, asset_refkey, TessellationEvaluationShader::from_asset(engine, path, "main").unwrap()),
-				VK_SHADER_STAGE_GEOMETRY_BIT => shader_insert_dupcheck(&mut assets, asset_refkey, GeometryShader::from_asset(engine, path, "main").unwrap()),
-				VK_SHADER_STAGE_FRAGMENT_BIT => shader_insert_dupcheck(&mut assets, asset_refkey, FragmentShader::from_asset(engine, path, "main").unwrap()),
-				_ => unreachable!()
-			} { panic!("Shader Asset {} (at {}:{}) was attempted to load as different types", asset_refkey, l, c); }
-		}
-	}
-	*/
 
 	assets
 }

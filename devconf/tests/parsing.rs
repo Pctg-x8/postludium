@@ -34,7 +34,7 @@ $SMAACombineRP: PresentedRenderPass
 - Format: R8G8B8A8 UNORM
 #- ClearMode: None
 ";
-	let pdr = load_configurations(std::path::PathBuf::new().into(), |_| Ok(testcase.to_owned()));
+	let pdr = load_configurations(std::path::PathBuf::new().into(), |_| Ok(testcase.to_owned()), &mut StdErrReporter);
 	assert_eq!(pdr.renderpasses["FirstRP"].attachments["Backbuffer"], RPAttachment
 	{
 		format: LocationPacked(Location(4, 16), Format::Value(VkFormat::R16G16B16A16_SFLOAT)), clear_on_load: Some(true), preserve_content: false,

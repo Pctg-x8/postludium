@@ -15,6 +15,10 @@ impl OperationResult
 {
 	pub fn propagate_failure(self, other: Self) -> Self { if let OperationResult::Failed(_) = other { other } else { self } }
 	pub fn report_error(self, line: usize) { if let OperationResult::Failed(reason) = self { panic!("Operation has failed({}) in processing at line {}", reason, line) } }
+	pub fn rewrap_err<F, R>(self, wrapper: F) -> Result<(), R> where F: FnOnce(Cow<'static, str>) -> R
+	{
+		if let OperationResult::Failed(n) = self { Err(wrapper(n)) } else { Ok(()) }
+	}
 }
 
 pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
@@ -153,11 +157,11 @@ pub struct ParsedDeviceResources
 }
 pub struct IndependentShaders
 {
-	pub vertex: NamedContents<IndependentPipelineShaderStageInfo>,
-	pub tesscontrol: NamedContents<IndependentPipelineShaderStageInfo>,
-	pub tessevaluation: NamedContents<IndependentPipelineShaderStageInfo>,
-	pub geometry: NamedContents<IndependentPipelineShaderStageInfo>,
-	pub fragment: NamedContents<IndependentPipelineShaderStageInfo>
+	pub vertex: NamedContents<VertexShaderStageInfo>,
+	pub tesscontrol: NamedContents<IndependentShaderStageInfo>,
+	pub tessevaluation: NamedContents<IndependentShaderStageInfo>,
+	pub geometry: NamedContents<IndependentShaderStageInfo>,
+	pub fragment: NamedContents<IndependentShaderStageInfo>
 }
 impl IndependentShaders
 {
@@ -238,7 +242,7 @@ pub struct PipelineShaderStageInfo
 	pub asset: LocationPacked<AssetResource>, pub consts: BTreeMap<usize, LocationPacked<NumericLiteral>>
 }
 #[derive(Debug, PartialEq)]
-pub struct IndependentPipelineShaderStageInfo
+pub struct IndependentShaderStageInfo
 {
 	pub stage: VkShaderStageFlags, pub asset: LocationPacked<AssetResource>, pub consts: BTreeMap<usize, LocationPacked<NumericLiteral>>
 }
@@ -261,6 +265,15 @@ pub enum ViewportScissorEntry { ScreenView, Custom(VkViewport, VkRect2D) }
 pub struct VertexAttributeInfo { binding: u32, format: LocationPacked<Format>, offset: u32 }
 #[derive(Debug, PartialEq)]
 pub enum VertexBindingRegistry { PerVertex(Option<u32>), PerInstance(Option<u32>), Empty }
+
+/// Shader Conversions
+impl IndependentShaderStageInfo
+{
+	pub fn from_pss(pss: PipelineShaderStageInfo, stage: VkShaderStageFlags) -> Self
+	{
+		IndependentShaderStageInfo { stage: stage, asset: pss.asset, consts: pss.consts }
+	}
+}
 
 /// Element Trait: Indicates that the element has location information.
 pub trait LocationProvider

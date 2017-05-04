@@ -21,38 +21,62 @@ pub use assetloader::LoadedAssets;
 mod instantiate;
 pub use instantiate::*;
 
+pub trait ErrorReporter
+{
+	fn report_fmt(&mut self, args: std::fmt::Arguments);
+
+	fn report(&mut self, msg: &str) { self.report_fmt(format_args!("{}\n", msg)); }
+}
+pub struct StdErrReporter;
+impl ErrorReporter for StdErrReporter
+{
+	fn report(&mut self, msg: &str) { std::io::stderr().write(msg.as_ref()).unwrap(); }
+	fn report_fmt(&mut self, args: std::fmt::Arguments) { std::io::stderr().write_fmt(args).unwrap(); }
+}
+
 // Entry Function //
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 use std::io::Write;
 use std::borrow::Cow;
 use syntree::{ LocationPacked, ParsedDeviceResources };
-pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F) -> ParsedDeviceResources where F: FnMut(&Path) -> std::io::Result<String>
+pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F, reporter: &mut ErrorReporter) -> ParsedDeviceResources
+	where F: FnMut(&Path) -> std::io::Result<String>
 {
-	fn load_impl<F>(source: String, source_provider: &mut F, sink: &mut ParsedDeviceResources, loaded: &mut HashSet<PathBuf>)
-		where F: FnMut(&Path) -> std::io::Result<String>
+	fn load_impl<F>(source: String, source_provider: &mut F, sink: &mut ParsedDeviceResources, loaded: &mut HashSet<PathBuf>, reporter: &mut ErrorReporter)
+		-> Result<(), ()> where F: FnMut(&Path) -> std::io::Result<String>
 	{
 		let mut includes = Vec::new();
 		let chars = source.chars().collect::<Vec<_>>();
-		parse_device_resources(sink, &mut includes, &mut parsetools::LazyLines::new(&chars));
-		for LocationPacked(loc, include_path) in includes.into_iter()
+		match parse_device_resources(sink, &mut includes, &mut parsetools::LazyLines::new(&chars))
 		{
-			if !loaded.contains(&include_path)
+			Ok(()) => { for LocationPacked(loc, include_path) in includes.into_iter()
 			{
-				match source_provider(&include_path)
+				if !loaded.contains(&include_path)
 				{
-					Ok(s) =>
+					match source_provider(&include_path)
 					{
-						loaded.insert(include_path);
-						load_impl(s, source_provider, sink, loaded);
-					},
-					Err(e) =>
-					{
-						writeln!(std::io::stderr(), "Failed to load {}(included at {}): {}", include_path.to_string_lossy(), loc, e).unwrap();
-						loaded.insert(include_path);
+						Ok(s) =>
+						{
+							loaded.insert(include_path.clone());
+							if load_impl(s, source_provider, sink, loaded, reporter).is_err()
+							{
+								reporter.report_fmt(format_args!("-- In parsing {:?}", include_path));
+								Err(())
+							}
+							else { Ok(()) }
+						},
+						Err(e) =>
+						{
+							reporter.report_fmt(format_args!("Failed to load {}(included at {}): {}", include_path.to_string_lossy(), loc, e));
+							loaded.insert(include_path);
+							Err(())
+						}
 					}
 				}
-			}
+				else { Ok(()) }?
+			} Ok(()) },
+			Err(e) => { reporter.report_fmt(format_args!("{:?}", e)); Err(()) }
 		}
 	}
 	let mut loaded_sources = HashSet::new();
@@ -61,8 +85,11 @@ pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F) -> P
 	{
 		Ok(s) =>
 		{
-			loaded_sources.insert(entername.into_owned());
-			load_impl(s, &mut source_provider, &mut sink, &mut loaded_sources);
+			loaded_sources.insert(entername.clone().into_owned());
+			if load_impl(s, &mut source_provider, &mut sink, &mut loaded_sources, reporter).is_err()
+			{
+				reporter.report_fmt(format_args!("-- In parsing {:?}", entername));
+			}
 		},
 		Err(e) => panic!("Failed to load {}: {}", entername.to_string_lossy(), e)
 	}
