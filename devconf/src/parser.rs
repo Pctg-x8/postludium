@@ -28,7 +28,8 @@ impl ParsedDeviceResources
 			includes: Vec::new(), renderpasses: NamedContents::new(), simple_rps: NamedContents::new(), presented_rps: NamedContents::new(),
 			descriptor_set_layouts: NamedContents::new(), push_constant_layouts: NamedContents::new(),
 			pipeline_layouts: NamedContents::new(), descriptor_sets: NamedContents::new(), pipeline_states: NamedContents::new(),
-			externs: NamedContents::new(), framebuffers: NamedContents::new(), images: NamedContents::new(), ind_shaders: IndependentShaders::new()
+			externs: NamedContents::new(), framebuffers: NamedContents::new(), images: NamedContents::new(), samplers: NamedContents::new(),
+			ind_shaders: IndependentShaders::new()
 		}
 	}
 }
@@ -72,7 +73,8 @@ pub enum ParseError
 	NameNotAllowed(usize),
 	EntryDuplicated(Cow<'static, str>),
 	UnknownComponentSwizzle(usize),
-	UnknownUsageBits(&'static str, usize)
+	UnknownUsageBits(&'static str, usize),
+	UnknownFilterType(usize)
 }
 pub struct ParseErrorWithLine(ParseError, usize);
 trait WithLine<T, E> { fn with_line(self, line: usize) -> Result<T, E>; }
@@ -107,6 +109,7 @@ impl std::fmt::Debug for ParseErrorWithLine
 			&ParseError::UnknownDescriptorKind(p) => write!(fmt, "Unknown Descriptor Kind was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownComponentSwizzle(p) => write!(fmt, "Unknown Swizzling Component was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownUsageBits(f, p) => write!(fmt, "Unknown Usage Bits for {} was found at line {}, col {}", f, self.1, p),
+			&ParseError::UnknownFilterType(p) => write!(fmt, "Unknown Filter Type was found at line {}, col {}", self.1, p),
 			&ParseError::FormatRequired(p) => write!(fmt, "Format required for RenderPass Attachment at line {}, col {}", self.1, p),
 			&ParseError::UnknownPrimitiveTopology(true, p) => write!(fmt, "Unknown Primitive Topology with Adjacency was found at line {}, col {}", self.1, p),
 			&ParseError::UnknownPrimitiveTopology(false, p) => write!(fmt, "Unknown Primitive Topology was found at line {}, col {}", self.1, p),
@@ -463,20 +466,13 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 			/// Include <StringLiteral>
 			"Include" => source.drop_while(ignore_chars).parse::<StringLiteral>().map(PartialApply1!(LocationPacked::apply; From::from))
 				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(includes.push(p)) }).with_line(sline),
-			"RenderPass" => source.block::<RenderPassData>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.renderpasses, name, p, sline)),
-			"SimpleRenderPass" => source.block::<SimpleRenderPassData>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.simple_rps, name, p, sline)),
-			"PresentedRenderPass" => source.block::<PresentedRenderPassData>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.presented_rps, name, p, sline)),
-			"DescriptorSetLayout" => source.block::<DescriptorSetLayoutData>(lines)
-				.and_then(|p| insert_vuniq_auto_or(&mut sink.descriptor_set_layouts, name, p, sline)),
-			"PushConstantLayout" => source.block::<PushConstantLayout>(lines)
-				.and_then(|p| insert_vuniq_auto_or(&mut sink.push_constant_layouts, name, p, sline)),
-			"PipelineLayout" => source.block::<PipelineLayout>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_layouts, name, p, sline)),
-			"DescriptorSets" => source.block::<DescriptorSetsInfo>(lines)
-				.and_then(|p| insert_uniq_auto_or(&mut sink.descriptor_sets, name, p, sline)),
+			"RenderPass" => source.block::<RenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.renderpasses, name, p, sline)),
+			"SimpleRenderPass" => source.block::<SimpleRenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.simple_rps, name, p, sline)),
+			"PresentedRenderPass" => source.block::<PresentedRenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.presented_rps, name, p, sline)),
+			"DescriptorSetLayout" => source.block::<DescriptorSetLayoutData>(lines).and_then(|p| insert_vuniq_auto_or(&mut sink.descriptor_set_layouts, name, p, sline)),
+			"PushConstantLayout" => source.block::<PushConstantLayout>(lines).and_then(|p| insert_vuniq_auto_or(&mut sink.push_constant_layouts, name, p, sline)),
+			"PipelineLayout" => source.block::<PipelineLayout>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_layouts, name, p, sline)),
+			"DescriptorSets" => source.block::<DescriptorSetsInfo>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.descriptor_sets, name, p, sline)),
 			"PipelineState" => source.drop_while(ignore_chars).block::<PipelineStateInfo>(lines)
 				.and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_states, name, p, sline)),
 			"Extern" => source.drop_while(ignore_chars).parse::<ExternalResourceData>().with_line(sline)
@@ -485,6 +481,7 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 				.and_then(|p| insert_uniq_auto_or(&mut sink.framebuffers, name, p, sline)),
 			"Image" => source.drop_while(ignore_chars).block::<ImageDescription>(lines)
 				.and_then(|p| insert_uniq_auto_or(&mut sink.images, name, p, sline)),
+			"Sampler" => source.block::<SamplerDescription>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.samplers, name, p, sline)),
 			"VertexShader" => VertexShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
 				.and_then(|vsinfo| insert_uniq_auto_or(&mut sink.ind_shaders.vertex, name, vsinfo, sline)),
 			"FragmentShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
@@ -596,6 +593,43 @@ impl FromSourceBlock for ImageDescription
 			}).with_line(s.line())?;
 		}
 		Ok(obj)
+	}
+}
+impl FromSource for Filter
+{
+	fn object_name() -> Cow<'static, str> { "Filter Type".into() }
+	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
+	{
+		let s = source.take_until(ident_break);
+		match s.chars()
+		{
+			&['N', 'e', 'a', 'r', 'e', 's', 't'] => Ok(Filter::Nearest),
+			&['L', 'i', 'n', 'e', 'a', 'r'] => Ok(Filter::Linear),
+			_ => Err(ParseError::UnknownFilterType(s.current()))
+		}
+	}
+}
+impl FromSourceBlock for SamplerDescription
+{
+	fn parse(_: &mut ParseLine, lines: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
+	{
+		let mut smp = SamplerDescription { mag_filter: Filter::Linear, min_filter: Filter::Linear };
+
+		while let Some(mut s) = acquire_line(lines, 1)
+		{
+			acquire_config_name(&mut s).and_then(|name| match name.chars()
+			{
+				&['F', 'i', 'l', 't', 'e', 'r'] =>
+				{
+					let magf = s.drop_while(ignore_chars).parse::<Filter>()?;
+					let minf = if s.drop_while(ignore_chars).is_empty() { magf } else { s.parse::<Filter>()? };
+					smp.mag_filter = magf; smp.min_filter = minf; Ok(())
+				},
+				_ => Err(ParseError::UnknownConfig("Sampler"))
+			}).with_line(s.line())?;
+		}
+
+		Ok(smp)
 	}
 }
 

@@ -174,6 +174,7 @@ pub struct ParsedDeviceResources
 	pub externs: NamedContents<ExternalResourceData>,
 	pub framebuffers: NamedContents<FramebufferInfo>,
 	pub images: NamedContents<ImageDescription>,
+	pub samplers: NamedContents<SamplerDescription>,
 	pub ind_shaders: IndependentShaders
 }
 pub struct IndependentShaders
@@ -200,6 +201,8 @@ pub struct ImageDescription
 {
 	pub extent: Vec<ConfigInt<usize>>, pub format: Format, pub device_local: bool, pub usage: VkImageUsageFlags, pub mapping: ComponentMapping
 }
+#[derive(Debug, PartialEq)]
+pub struct SamplerDescription { pub mag_filter: Filter, pub min_filter: Filter }
 #[derive(Debug, PartialEq)]
 pub struct RPAttachment { pub format: LocationPacked<Format>, pub layouts: Transition<VkImageLayout>, pub clear_on_load: Option<bool>, pub preserve_content: bool }
 #[derive(Debug, PartialEq)]
