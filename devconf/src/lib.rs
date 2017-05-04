@@ -1,6 +1,6 @@
 //! Postludium: Device Configuration Processor
 
-#![feature(associated_consts, box_syntax)]
+#![feature(associated_consts, box_syntax, slice_patterns)]
 
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate parsetools;

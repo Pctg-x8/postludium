@@ -498,12 +498,6 @@ impl FromSource for ExternalResourceData
 	}
 }
 
-lazy_static!
-{
-	static ref ATTACHMENTS: Vec<char> = "Attachments".chars().collect();
-	static ref SUBPASSES: Vec<char> = "Subpasses".chars().collect();
-	static ref DEPENDENCIES: Vec<char> = "Dependencies".chars().collect();
-}
 impl FromSourceBlock for RenderPassData
 {
 	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
@@ -511,49 +505,40 @@ impl FromSourceBlock for RenderPassData
 		let mut rpd = RenderPassData { attachments: NamedContents::new(), subpasses: NamedContents::new(), deps: Vec::new() };
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			acquire_config_name(&mut s).with_line(s.line()).and_then(|name| PartialEqualityMatchMap!(name;
+			acquire_config_name(&mut s).with_line(s.line()).and_then(|name| match name.chars()
 			{
-				ATTACHMENTS[..] => if !rpd.attachments.is_empty() { Err(ParseError::DefinitionOverrided).with_line(s.line()) }
-				else
+				&['A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't', 's'] => rpd.attachments.sink_check_overriding_online(s.line(), |sink|
 				{
 					while let Some(mut s) = acquire_line(source, 2)
 					{
 						let l = NamedConfigLine::parse(&mut s, RPAttachment::parse).with_line(s.line())?;
-						rpd.attachments.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
+						sink.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
 					}
 					Ok(())
-				},
-				SUBPASSES[..] => if !rpd.subpasses.is_empty() { Err(ParseError::DefinitionOverrided).with_line(s.line()) }
-				else
+				}),
+				&['S', 'u', 'b', 'p', 'a', 's', 's', 'e', 's'] => rpd.subpasses.sink_check_overriding_online(s.line(), |sink|
 				{
 					while let Some(mut s) = acquire_line(source, 2)
 					{
 						let l = NamedConfigLine::parse(&mut s, RPSubpassDesc::parse).with_line(s.line())?;
-						rpd.subpasses.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
+						sink.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
 					}
 					Ok(())
-				},
-				DEPENDENCIES[..] => if !rpd.deps.is_empty() { Err(ParseError::DefinitionOverrided).with_line(s.line()) }
-				else
+				}),
+				&['D', 'e', 'p', 'e', 'n', 'd', 'e', 'n', 'c', 'i', 'e', 's'] => rpd.deps.sink_check_overriding_online(s.line(), |sink|
 				{
 					while let Some(mut s) = acquire_line(source, 2)
 					{
 						let dep = s.parse::<RPSubpassDeps>().with_line(s.line())?;
-						rpd.deps.push(dep);
+						sink.push(dep);
 					}
 					Ok(())
-				};
+				}),
 				_ => Err(ParseError::UnknownConfig("RenderPass")).with_line(s.line())
-			}))?
+			})?
 		}
 		Ok(rpd)
 	}
-}
-lazy_static!
-{
-	static ref RPO_CLEAR_ON_LOAD: Vec<char> = "ClearOnLoad".chars().collect();
-	static ref RPO_LOAD_CONTENT: Vec<char> = "LoadContent".chars().collect();
-	static ref RPO_PRESERVE_CONTENT: Vec<char> = "PreserveContent".chars().collect();
 }
 impl FromSource for RPAttachment
 {
@@ -571,42 +556,20 @@ impl FromSource for RPAttachment
 			fn recurse(rpa: &mut RPAttachment, source: &mut ParseLine) -> Result<(), ParseError>
 			{
 				if source.is_empty() { Ok(()) }
-				else if source.starts_with_trailing_opt(&RPO_CLEAR_ON_LOAD, ident_break)
+				else
 				{
-					rpa.clear_on_load = Some(true);
-					if source.drop_opt(RPO_CLEAR_ON_LOAD.len()).drop_while(ignore_chars).front() == Some('/')
-					{
-						recurse(rpa, source.drop_opt(1).drop_while(ignore_chars))
-					}
+					if clear_on_load_token(source) { rpa.clear_on_load = Some(true); Ok(()) }
+					else if load_content_token(source) { rpa.clear_on_load = Some(false); Ok(()) }
+					else if preserve_content_token(source) { rpa.preserve_content = true; Ok(()) }
+					else { Err(ParseError::UnknownRenderPassAttachmentOptions(source.current())) }?;
+
+					if source.drop_while(ignore_chars).front() == Some('/') { recurse(rpa, source.drop_opt(1).drop_while(ignore_chars)) }
 					else { Ok(()) }
 				}
-				else if source.starts_with_trailing_opt(&RPO_LOAD_CONTENT, ident_break)
-				{
-					rpa.clear_on_load = Some(false);
-					if source.drop_opt(RPO_LOAD_CONTENT.len()).drop_while(ignore_chars).front() == Some('/')
-					{
-						recurse(rpa, source.drop_opt(1).drop_while(ignore_chars))
-					}
-					else { Ok(()) }
-				}
-				else if source.starts_with_trailing_opt(&RPO_PRESERVE_CONTENT, ident_break)
-				{
-					rpa.preserve_content = true;
-					if source.drop_opt(RPO_PRESERVE_CONTENT.len()).drop_while(ignore_chars).front() == Some('/')
-					{
-						recurse(rpa, source.drop_opt(1).drop_while(ignore_chars))
-					}
-					else { Ok(()) }
-				}
-				else { Err(ParseError::UnknownRenderPassAttachmentOptions(source.current())) }
 			}
 			recurse(&mut rpa, source.drop_opt(1).drop_while(ignore_chars)).map(|_| rpa)
 		}
 	}
-}
-lazy_static!
-{
-	static ref SDI_RENDER_TO: Vec<char> = "RenderTo".chars().collect();
 }
 impl FromSource for RPSubpassDesc
 {
@@ -617,21 +580,13 @@ impl FromSource for RPSubpassDesc
 		fn recurse<'s>(input: &mut ParseLine<'s>, sink: &mut RPSubpassDesc) -> Result<(), ParseError>
 		{
 			if input.is_empty() { Ok(()) }
-			else if input.starts_with_trailing_opt(&SDI_RENDER_TO, ident_break)
+			else
 			{
-				// RenderTo int/[ints...]
-				let v = input.drop_opt(SDI_RENDER_TO.len()).drop_while(ignore_chars).array_loc::<ConfigInt>()?;
-				if sink.color_outs.is_empty() { sink.color_outs = v; recurse(input.drop_while(ignore_chars), sink) }
-				else { Err(ParseError::DefinitionOverrided) }
+				if render_to_token(input) { sink.color_outs.assign_check_overriding(|| input.drop_while(ignore_chars).array_loc::<ConfigInt>()) }
+				else if from_token(input) { sink.inputs.assign_check_overriding(|| input.drop_while(ignore_chars).array_loc::<ConfigInt>()) }
+				else { Err(ParseError::CorruptedSubpassDesc(input.current())) }?;
+				recurse(input.drop_while(ignore_chars), sink)
 			}
-			else if from_token(input)
-			{
-				// From int/[ints...]
-				let v = input.drop_while(ignore_chars).array_loc::<ConfigInt>()?;
-				if sink.inputs.is_empty() { sink.inputs = v; recurse(input.drop_while(ignore_chars), sink) }
-				else { Err(ParseError::DefinitionOverrided) }
-			}
-			else { Err(ParseError::CorruptedSubpassDesc(input.current())) }
 		}
 		let mut rpsd = RPSubpassDesc { color_outs: Vec::new(), inputs: Vec::new() };
 		recurse(source, &mut rpsd).map(|_| rpsd)
@@ -647,11 +602,7 @@ impl FromSource for RPSubpassDeps
 		let pass_trans = Transition::parse(source, ConfigInt::parse_with_location)?;
 		let access_mask_trans = source.drop_while(ignore_chars).consume_delimiter(':',
 			|source| Transition::parse(source.drop_while(ignore_chars), AccessFlags::parse_with_location))?;
-		let stage_bits = if at_token(source.drop_while(ignore_chars))
-		{
-			parse_pipeline_stage_bits(source.drop_while(ignore_chars))
-		}
-		else { Err(ParseError::DelimiterRequired(source.current())) }?;
+		let stage_bits = source.drop_while(ignore_chars).consume(at_token, || "\"At\" or \"@\"".into(), |s| parse_pipeline_stage_bits(s.drop_while(ignore_chars)))?;
 		let by_region = if source.drop_while(ignore_chars).front() == Some(',')
 		{
 			source.drop_opt(1).drop_while(ignore_chars).starts_with_trailing_opt(&BY_REGION, ident_break)
@@ -662,17 +613,15 @@ impl FromSource for RPSubpassDeps
 }
 fn parse_rp_clear_mode(source: &ParseLine) -> Result<Option<bool>, ParseError>
 {
-	if *source == ['N', 'o', 'n', 'e'][..] { Ok(None) }
-	else if *source == ['O', 'n', 'L', 'o', 'a', 'd'][..] { Ok(Some(true)) }
-	else if *source == ['P', 'r', 'e', 's', 'e', 'r', 'v', 'e'][..] { Ok(Some(false)) }
-	else { Err(ParseError::UnknownClearMode(source.current())) }
+	match source.chars()
+	{
+		&['N', 'o', 'n', 'e'] => Ok(None),
+		&['O', 'n', 'L', 'o', 'a', 'd'] => Ok(Some(true)),
+		&['P', 'r', 'e', 's', 'e', 'r', 'v', 'e'] => Ok(Some(false)),
+		_ => Err(ParseError::UnknownClearMode(source.current()))
+	}
 }
 
-lazy_static!
-{
-	static ref FORMAT: Vec<char> = "Format".chars().collect();
-	static ref CLEARMODE: Vec<char> = "ClearMode".chars().collect();
-}
 impl FromSourceBlock for SimpleRenderPassData
 {
 	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<SimpleRenderPassData, ParseErrorWithLine>
@@ -680,15 +629,15 @@ impl FromSourceBlock for SimpleRenderPassData
 		let (mut fmt, mut clear_mode) = (None, None);
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			acquire_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+			acquire_config_name(&mut s).and_then(|name| match name.chars()
 			{
-				FORMAT[..] => s.drop_while(ignore_chars).parse_loc::<Format>().and_then(|f| assign_check_overriding(&mut fmt, f)),
-				CLEARMODE[..] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () });
+				&['F', 'o', 'r', 'm', 'a', 't'] => fmt.assign_check_overriding(|| s.drop_while(ignore_chars).parse_loc::<Format>()),
+				&['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }),
 				_ => Err(ParseError::UnknownConfig("SimpleRenderPass"))
-			})).with_line(s.line())?;
+			}).with_line(s.line())?;
 		}
-		fmt.ok_or(ParseError::ConfigRequired("Format")).map(|fmt| SimpleRenderPassData { format: fmt, clear_on_load: clear_mode })
-			.with_line(enterline.line())
+		fmt.ok_or(ParseError::ConfigRequired("Format")).with_line(enterline.line())
+			.map(|fmt| SimpleRenderPassData { format: fmt, clear_on_load: clear_mode })
 	}
 }
 impl FromSourceBlock for PresentedRenderPassData
@@ -698,15 +647,15 @@ impl FromSourceBlock for PresentedRenderPassData
 		let (mut fmt, mut clear_mode) = (None, None);
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			acquire_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+			acquire_config_name(&mut s).and_then(|name| match name.chars()
 			{
-				FORMAT[..] => s.drop_while(ignore_chars).parse_loc::<Format>().and_then(|f| assign_check_overriding(&mut fmt, f)),
-				CLEARMODE[..] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; () });
+				&['F', 'o', 'r', 'm', 'a', 't'] => fmt.assign_check_overriding(|| s.drop_while(ignore_chars).parse_loc::<Format>()),
+				&['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }),
 				_ => Err(ParseError::UnknownConfig("PresentedRenderPass"))
-			})).with_line(s.line())?;
+			}).with_line(s.line())?;
 		}
-		fmt.ok_or(ParseError::ConfigRequired("Format")).map(|fmt| PresentedRenderPassData { format: fmt, clear_on_load: clear_mode })
-			.with_line(enterline.line())
+		fmt.ok_or(ParseError::ConfigRequired("Format")).with_line(enterline.line())
+			.map(|fmt| PresentedRenderPassData { format: fmt, clear_on_load: clear_mode })
 	}
 }
 lazy_static! { static ref PRESENTED: Vec<char> = "Presented".chars().collect(); }
@@ -745,7 +694,7 @@ impl FromSourceBlock for FramebufferInfo
 		while let Some(mut s) = acquire_line(source, 1)
 		{
 			acquire_config_name(s.drop_while(ignore_chars)).and_then(|name|
-				if name == CLEARMODE[..] { parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }) }
+				if name.chars() == ['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] { parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }) }
 				else { Err(ParseError::UnknownConfig("Framebuffer")) }
 			).with_line(s.line())?;
 		}
@@ -814,11 +763,6 @@ impl FromSource for DescriptorEntry
 		Ok(DescriptorEntry { count: count, kind: typename, visibility: visibility })
 	}
 }
-lazy_static!
-{
-	static ref RANGE: Vec<char> = "Range".chars().collect();
-	static ref VISIBILITY: Vec<char> = "Visibility".chars().collect();
-}
 impl FromSourceBlock for PushConstantLayout
 {
 	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
@@ -826,22 +770,17 @@ impl FromSourceBlock for PushConstantLayout
 		let (mut range, mut vis) = (None, None);
 		while let Some(mut s) = acquire_line(source, 1)
 		{
-			acquire_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+			acquire_config_name(&mut s).and_then(|name| match name.chars()
 			{
-				RANGE[..] => s.drop_while(ignore_chars).ranged::<usize>().and_then(|r| assign_check_overriding(&mut range, r)),
-				VISIBILITY[..] => s.drop_while(ignore_chars).parse::<ShaderStageFlags>().and_then(|v| assign_check_overriding(&mut vis, v));
+				&['R', 'a', 'n', 'g', 'e'] => range.assign_check_overriding(|| s.drop_while(ignore_chars).ranged::<usize>()),
+				&['V', 'i', 's', 'i', 'b', 'i', 'l', 'i', 't', 'y'] => vis.assign_check_overriding(|| s.drop_while(ignore_chars).parse::<ShaderStageFlags>()),
 				_ => Err(ParseError::UnknownConfig("PushConstantLayout"))
-			})).with_line(s.line())?;
+			}).with_line(s.line())?;
 		}
 		let range = range.ok_or(ParseError::ConfigRequired("Range")).with_line(enterline.line())?;
 		let visibility = vis.ok_or(ParseError::ConfigRequired("Visibility")).with_line(enterline.line())?;
 		Ok(PushConstantLayout { range: range, visibility: visibility })
 	}
-}
-lazy_static!
-{
-	static ref DESCRIPTORS: Vec<char> = "Descriptors".chars().collect();
-	static ref PUSHCONSTANTLAYOUTS: Vec<char> = "PushConstantLayouts".chars().collect();
 }
 impl FromSourceBlock for PipelineLayout
 {
@@ -851,12 +790,14 @@ impl FromSourceBlock for PipelineLayout
 		while let Some(mut s) = acquire_line(source, 1)
 		{
 			/// - | "Descriptors" ints... / "PushConstantLayouts" ints...
-			acquire_config_name(&mut s).and_then(|name| PartialEqualityMatchMap!(name;
+			acquire_config_name(&mut s).and_then(|name| match name.chars()
 			{
-				DESCRIPTORS[..] => s.drop_while(ignore_chars).array_loc::<ConfigInt>().and_then(|cv| vassign_check_overriding(&mut desc, cv)),
-				PUSHCONSTANTLAYOUTS[..] => s.drop_while(ignore_chars).array_loc::<ConfigInt>().and_then(|cv| vassign_check_overriding(&mut pcls, cv));
+				&['D', 'e', 's', 'c', 'r', 'i', 'p', 't', 'o', 'r', 's'] =>
+					desc.assign_check_overriding(|| s.drop_while(ignore_chars).array_loc::<ConfigInt>()),
+				&['P', 'u', 's', 'h', 'C', 'o', 'n', 's', 't', 'a', 'n', 't', 'L', 'a', 'y', 'o', 'u', 't', 's'] =>
+					pcls.assign_check_overriding(|| s.drop_while(ignore_chars).array_loc::<ConfigInt>()),
 				_ => Err(ParseError::UnknownConfig("PipelineLayout"))
-			})).with_line(s.line())?;
+			}).with_line(s.line())?;
 		}
 		Ok(PipelineLayout { descs: desc, pushconstants: pcls })
 	}
@@ -896,19 +837,19 @@ impl FromSourceBlock for PipelineStateInfo
 		{
 			acquire_config_name(&mut s).with_line(s.line()).and_then(|name| match name.clone_as_string().as_ref()
 			{
-				"VertexShader" => s.drop_while(ignore_chars).block::<VertexShaderStageInfo>(source)
-					.and_then(|sh| assign_check_overriding(&mut vsinfo, sh).with_line(s.line())),
-				"FragmentShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
-					.and_then(|sh| assign_check_overriding(&mut shaderinfo.fragment, sh).with_line(s.line())),
-				"GeometryShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
-					.and_then(|sh| assign_check_overriding(&mut shaderinfo.geometry, sh).with_line(s.line())),
-				"TessellationControlShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
-					.and_then(|sh| assign_check_overriding(&mut shaderinfo.tesscontrol, sh).with_line(s.line())),
-				"TessellationEvaluationShader" => s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)
-					.and_then(|sh| assign_check_overriding(&mut shaderinfo.tessevaluation, sh).with_line(s.line())),
-				"PrimitiveTopology" => s.drop_while(ignore_chars).parse::<VkPrimitiveTopology>().and_then(|p| assign_check_overriding(&mut primt, p)).with_line(s.line()),
-				"ViewportScissors" => parse_viewport_scissors(s.drop_while(ignore_chars), source).and_then(|v| vassign_check_overriding(&mut vpsc, v)).with_line(s.line()),
-				"BlendStates" => AttachmentBlendState::parse_array(s.drop_while(ignore_chars)).and_then(|v| vassign_check_overriding(&mut blends, v)).with_line(s.line()),
+				"VertexShader" =>
+					vsinfo.assign_check_overriding_online(s.line(), || s.drop_while(ignore_chars).block::<VertexShaderStageInfo>(source)),
+				"FragmentShader" =>
+					shaderinfo.fragment.assign_check_overriding_online(s.line(), || s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)),
+				"GeometryShader" =>
+					shaderinfo.geometry.assign_check_overriding_online(s.line(), || s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)),
+				"TessellationControlShader" =>
+					shaderinfo.tesscontrol.assign_check_overriding_online(s.line(), || s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)),
+				"TessellationEvaluationShader" =>
+					shaderinfo.tessevaluation.assign_check_overriding_online(s.line(), || s.drop_while(ignore_chars).block::<PipelineShaderStageInfo>(source)),
+				"PrimitiveTopology" => primt.assign_check_overriding(|| s.drop_while(ignore_chars).parse::<VkPrimitiveTopology>()).with_line(s.line()),
+				"ViewportScissors" => vpsc.assign_check_overriding_online(s.line(), || parse_viewport_scissors(s.drop_while(ignore_chars), source)),
+				"BlendStates" => blends.assign_check_overriding(|| s.drop_while(ignore_chars).array::<AttachmentBlendState>()).with_line(s.line()),
 				_ => Err(ParseErrorWithLine(ParseError::UnknownConfig("PipelineState"), s.line()))
 			})?;
 		}
@@ -939,9 +880,6 @@ impl FromSourceBlock for VertexShaderStageInfo
 }
 lazy_static!
 {
-	static ref CONSTANT: Vec<char> = "Constant".chars().collect();
-	static ref STREAMBINDINGS: Vec<char> = "StreamBindings".chars().collect();
-	static ref INPUT: Vec<char> = "Input".chars().collect();
 	static ref PERVERTEX: Vec<char> = "PerVertex".chars().collect();
 	static ref PERINSTANCE: Vec<char> = "PerInstance".chars().collect();
 }
@@ -963,17 +901,6 @@ impl FromSource for StreamBindingDesc
 		}
 	}
 }
-fn sequence2<F, R, F2, R2, E>(c: &mut ParseLine, f1: F, f2: F2) -> Result<(R, R2), E>
-	where F: FnOnce(&mut ParseLine) -> Result<R, E>, F2: FnOnce(&mut ParseLine) -> Result<R2, E>
-{
-	f1(c).and_then(|x1| f2(c).map(|x2| (x1, x2)))
-}
-fn sequence4<F, R, F2, R2, F3, R3, F4, R4, E>(c: &mut ParseLine, f1: F, f2: F2, f3: F3, f4: F4) -> Result<(R, R2, R3, R4), E>
-	where F: FnOnce(&mut ParseLine) -> Result<R, E>, F2: FnOnce(&mut ParseLine) -> Result<R2, E>,
-		F3: FnOnce(&mut ParseLine) -> Result<R3, E>, F4: FnOnce(&mut ParseLine) -> Result<R4, E>
-{
-	f1(c).and_then(|x1| f2(c).and_then(|x2| f3(c).and_then(|x3| f4(c).map(|x4| (x1, x2, x3, x4)))))
-}
 impl FromSourceArray for StreamBindingDesc {}
 impl VertexShaderStageInfo
 {
@@ -985,33 +912,27 @@ impl VertexShaderStageInfo
 		let (mut consts, mut bindings, mut inputs) = (BTreeMap::new(), Vec::new(), BTreeMap::new());
 		while let Some(mut s) = acquire_line(source, baseindent + 1)
 		{
-			if s.starts_with(&CONSTANT)
+			if constant_token(&mut s)
 			{
 				// - "Constant" usize ":" value
-				sequence2(s.drop_opt(CONSTANT.len()), 
-					|s| s.drop_while(ignore_chars).parse::<usize>(),
-					|s| s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
-				).map(|(index, value)| { consts.insert(index, value); })
+				let index = s.drop_while(ignore_chars).parse::<usize>().with_line(s.line())?;
+				s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
+					.map(|v| { consts.insert(index, v); })
 			}
-			else if s.starts_with(&STREAMBINDINGS)
+			else if stream_bindings_token(&mut s)
 			{
 				// - "StreamBindings" ":" (StreamBindingDesc...)
-				if !bindings.is_empty() { Err(ParseError::DefinitionOverrided) } else
-				{
-					s.drop_opt(STREAMBINDINGS.len()).drop_while(ignore_chars)
-						.consume_delimiter(':', |s| s.drop_while(ignore_chars).array::<StreamBindingDesc>()).map(|v| { bindings = v; })
-				}
+				bindings.assign_check_overriding(|| s.drop_while(ignore_chars).consume_delimiter(':', |s| s.drop_while(ignore_chars).array::<StreamBindingDesc>()))
 			}
-			else if s.starts_with(&INPUT)
+			else if input_token(&mut s)
 			{
 				// - "Input" usize "." usize To usize ":" Format
-				sequence4(s.drop_opt(INPUT.len()),
-					|s| s.drop_while(ignore_chars).parse::<usize>(),
-					|s| s.drop_while(ignore_chars).consume_char('.', || "\".\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>()),
-					|s| if to_token(s.drop_while(ignore_chars)) { s.drop_while(ignore_chars).parse::<usize>() }
-						else { Err(ParseError::Expected("\"To\" or \"->\"".into(), s.current())) },
-					|s| s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| s.drop_while(ignore_chars).parse::<Format>())
-				).map(|(binding, offset, index, format)| { inputs.insert(index, VertexInputInfo { binding, offset, format }); })
+				let binding = s.drop_while(ignore_chars).parse::<usize>().with_line(s.line())?;
+				let offset = s.drop_while(ignore_chars).consume_char('.', || "\".\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>()).with_line(s.line())?;
+				let index = s.drop_while(ignore_chars).consume(to_token, || "\"To\" or \"->\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>())
+					.with_line(s.line())?;
+				s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| s.drop_while(ignore_chars).parse::<Format>())
+					.map(|format| { inputs.insert(index, VertexInputInfo { binding, offset, format }); })
 			}
 			else { Err(ParseError::UnknownConfig("Vertex Shader Module")) }.with_line(s.line())?;
 		}
@@ -1028,12 +949,11 @@ impl PipelineShaderStageInfo
 		while let Some(mut s) = acquire_line(source, baseindent + 1)
 		{
 			/// - "Constant" usize : value
-			if s.starts_with(&['C', 'o', 'n', 's', 't', 'a', 'n', 't'])
+			if constant_token(&mut s)
 			{
-				sequence2(&mut s,
-					|s| s.drop_opt(8).drop_while(ignore_chars).parse::<usize>(),
-					|s| s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
-				).map(|(index, value)| { consts.insert(index, value); })
+				let index = s.drop_while(ignore_chars).parse::<usize>().with_line(s.line())?;
+				s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
+					.map(|v| { consts.insert(index, v); })
 			}
 			else { Err(ParseError::UnknownConfig("Shader Module")) }.with_line(s.line())?;
 		}
@@ -1075,7 +995,7 @@ impl FromSource for VkPrimitiveTopology
 		}
 	}
 }
-fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> Result<Vec<ViewportScissorEntry>, ParseError>
+fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> Result<Vec<ViewportScissorEntry>, ParseErrorWithLine>
 {
 	let mut v = Vec::new();
 	if current.front() == None
@@ -1083,7 +1003,7 @@ fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> R
 		// Descending
 		while let Some(mut s) = acquire_line(source, 2)
 		{
-			v.push(ViewportScissorEntry::parse(&mut s)?);
+			v.push(ViewportScissorEntry::parse(&mut s).with_line(s.line())?);
 		}
 		Ok(v)
 	}
@@ -1106,9 +1026,9 @@ fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> R
 		{
 			Ok(()) => if current.front() == Some(']') { Ok(v) } else { Err(ParseError::ClosingRequired(current.current())) },
 			Err(e) => Err(e)
-		}
+		}.with_line(current.line())
 	}
-	else { Err(ParseError::Expected("Array or Children, of ViewportScissor".into(), current.current())) }
+	else { Err(ParseErrorWithLine(ParseError::Expected("Array or Children, of ViewportScissor".into(), current.current()), current.line())) }
 }
 
 /// Short Tokens
@@ -1132,24 +1052,27 @@ pub fn at_token(input: &mut ParseLine) -> bool
 	else if input.front() == Some('@') { input.drop_opt(1); true }
 	else { false }
 }
-pub fn for_token(input: &mut ParseLine) -> bool
+macro_rules! Token
 {
-	// "for"
-	if input.starts_with_trailing_opt(&['f', 'o', 'r'], ident_break) { input.drop_opt(3); true }
-	else { false }
+	($name: ident ($chars: expr)) =>
+	{
+		pub fn $name(input: &mut ParseLine) -> bool
+		{
+			if input.starts_with_trailing_opt(&$chars, ident_break) { input.drop_opt($chars.len()); true }
+			else { false }
+		}
+	}
 }
-pub fn with_token(input: &mut ParseLine) -> bool
-{
-	// "with"
-	if input.starts_with_trailing_opt(&['w', 'i', 't', 'h'], ident_break) { input.drop_opt(4); true }
-	else { false }
-}
-pub fn adjacency_token(input: &mut ParseLine) -> bool
-{
-	// "Adjacency"
-	if input.starts_with_trailing_opt(&['A', 'd', 'j', 'a', 'c', 'e', 'n', 'c', 'y'], ident_break) { input.drop_opt(9); true }
-	else { false }
-}
+Token!(for_token				(['f', 'o', 'r']));
+Token!(with_token				(['w', 'i', 't', 'h']));
+Token!(adjacency_token			(['A', 'd', 'j', 'a', 'c', 'e', 'n', 'c', 'y']));
+Token!(constant_token			(['C', 'o', 'n', 's', 't', 'a', 'n', 't']));
+Token!(stream_bindings_token	(['S', 't', 'r', 'e', 'a', 'm', 'B', 'i', 'n', 'd', 'i', 'n', 'g', 's']));
+Token!(input_token				(['I', 'n', 'p', 'u', 't']));
+Token!(clear_on_load_token		(['C', 'l', 'e', 'a', 'r', 'O', 'n', 'L', 'o', 'a', 'd']));
+Token!(load_content_token		(['L', 'o', 'a', 'd', 'C', 'o', 'n', 't', 'e', 'n', 't']));
+Token!(preserve_content_token	(['P', 'r', 'e', 's', 'e', 'r', 'v', 'e', 'C', 'o', 'n', 't', 'e', 'n', 't']));
+Token!(render_to_token			(['R', 'e', 'n', 'd', 'e', 'r', 'T', 'o']));
 
 // --- Parser Utils --- //
 pub fn ignore_chars(c: char) -> bool { c == ' ' || c == '\t' }
@@ -1157,14 +1080,49 @@ pub fn ident_break(c: char) -> bool
 {
 	c == ':' || c == '-' || c == '[' || c == ']' || c == ',' || c == '<' || c == '>' || c == '/' || c == '.' || ignore_chars(c)
 }
-fn assign_check_overriding<T>(dest: &mut Option<T>, value: T) -> Result<(), ParseError>
+pub trait SetOnce<T = Self>: Sized
 {
-	if dest.is_none() { *dest = Some(value); Ok(()) } else { Err(ParseError::DefinitionOverrided) }
+	fn can_set(&self) -> bool;
+	fn set(&mut self, value: T);
+
+	fn assign_check_overriding<F>(&mut self, value: F) -> Result<(), ParseError> where F: FnOnce() -> Result<T, ParseError>
+	{
+		if self.can_set() { value().map(|v| self.set(v)) } else { Err(ParseError::DefinitionOverrided) }
+	}
+	fn assign_check_overriding_online<F>(&mut self, line: usize, value: F) -> Result<(), ParseErrorWithLine> where F: FnOnce() -> Result<T, ParseErrorWithLine>
+	{
+		if self.can_set() { value().map(|v| self.set(v)) } else { Err(ParseErrorWithLine(ParseError::DefinitionOverrided, line)) }
+	}
 }
-fn vassign_check_overriding<T>(dest: &mut Vec<T>, value: Vec<T>) -> Result<(), ParseError>
+pub trait SinkOnce: SetOnce<Self>
 {
-	if dest.is_empty() { *dest = value; Ok(()) } else { Err(ParseError::DefinitionOverrided) }
+	fn sink_check_overriding<F>(&mut self, processor: F) -> Result<(), ParseError> where F: FnOnce(&mut Self) -> Result<(), ParseError>
+	{
+		if self.can_set() { processor(self) } else { Err(ParseError::DefinitionOverrided) }
+	}
+	fn sink_check_overriding_online<F>(&mut self, line: usize, processor: F) -> Result<(), ParseErrorWithLine>
+		where F: FnOnce(&mut Self) -> Result<(), ParseErrorWithLine>
+	{
+		if self.can_set() { processor(self) } else { Err(ParseErrorWithLine(ParseError::DefinitionOverrided, line)) }
+	}
 }
+impl<T> SetOnce<T> for Option<T>
+{
+	fn can_set(&self) -> bool { self.is_none() }
+	fn set(&mut self, value: T) { *self = Some(value); }
+}
+impl<T> SetOnce for Vec<T>
+{
+	fn can_set(&self) -> bool { self.is_empty() }
+	fn set(&mut self, value: Vec<T>) { *self = value; }
+}
+impl<T> SetOnce for NamedContents<T>
+{
+	fn can_set(&self) -> bool { self.is_empty() }
+	fn set(&mut self, value: NamedContents<T>) { *self = value; }
+}
+impl<T> SinkOnce for Vec<T> {}
+impl<T> SinkOnce for NamedContents<T> {}
 pub fn acquire_line<'s>(lines: &mut LazyLines<'s>, level: usize) -> Option<ParseLine<'s>>
 {
 	const HEAD: [char; 3] = ['-'; 3];
@@ -1184,20 +1142,13 @@ impl<C> NamedConfigLine<C>
 {
 	fn parse<'s, F>(input: &mut ParseLine<'s>, argparser: F) -> Result<Self, ParseError> where F: FnOnce(&mut ParseLine<'s>) -> Result<C, ParseError>
 	{
-		let name_res = if input.front() == Some('$')
+		if input.front() == Some('$')
 		{
-			let name = input.drop_opt(1).take_until(ident_break);
-			if name.is_empty() { Err(ParseError::NameRequired(name.current())) }
-			else
-			{
-				input.drop_while(ignore_chars);
-				if input.front() == Some(':') { input.drop_opt(1); Ok(Some(name.clone_as_string())) }
-				else { Err(ParseError::DelimiterRequired(input.current())) }
-			}
+			let name = input.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::NameRequired(s.current()))?;
+			input.drop_while(ignore_chars).consume_delimiter(':', |s| argparser(s.drop_while(ignore_chars)))
+				.map(|c| NamedConfigLine { name: Some(name.clone_as_string()), config: c })
 		}
-		else { Ok(None) };
-
-		name_res.and_then(|name_opt| argparser(input.drop_while(ignore_chars)).map(|v| NamedConfigLine { name: name_opt, config: v }))
+		else { argparser(input).map(|c| NamedConfigLine { name: None, config: c }) }
 	}
 }
 impl NamedConfigLine<()>
