@@ -468,7 +468,7 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 				.and_then(|p| if name.is_some() { Err(ParseError::NameNotAllowed(insource)) } else { Ok(includes.push(p)) }).with_line(sline),
 			"RenderPass" => source.block::<RenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.renderpasses, name, p, sline)),
 			"SimpleRenderPass" => source.block::<SimpleRenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.simple_rps, name, p, sline)),
-			"PresentedRenderPass" => source.block::<PresentedRenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.presented_rps, name, p, sline)),
+			"PresentRenderPass" => source.block::<PresentedRenderPassData>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.presented_rps, name, p, sline)),
 			"DescriptorSetLayout" => source.block::<DescriptorSetLayoutData>(lines).and_then(|p| insert_vuniq_auto_or(&mut sink.descriptor_set_layouts, name, p, sline)),
 			"PushConstantLayout" => source.block::<PushConstantLayout>(lines).and_then(|p| insert_vuniq_auto_or(&mut sink.push_constant_layouts, name, p, sline)),
 			"PipelineLayout" => source.block::<PipelineLayout>(lines).and_then(|p| insert_uniq_auto_or(&mut sink.pipeline_layouts, name, p, sline)),
