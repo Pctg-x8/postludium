@@ -73,13 +73,12 @@ pub struct ResolvedRPSubpassDesc
 }
 impl RPSubpassDesc
 {
-	pub fn resolve(self, parent: &RenderPassData, er: &mut ErrorReporter) -> ResolvedRPSubpassDesc
+	pub fn resolve(&self, refto: &NamedContents<RPAttachment>, er: &mut ErrorReporter) -> Option<ResolvedRPSubpassDesc>
 	{
-		ResolvedRPSubpassDesc
-		{
-			color_outs: self.color_outs.into_iter().map(|ci| ci.resolve(er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect(),
-			inputs: self.inputs.into_iter().map(|ci| ci.resolve(er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect()
-		}
+		let co = self.color_outs.iter().map(|ci| ci.resolve(er, Delegate!(refto => reverse_index))).collect::<Option<_>>();
+		let is = self.inputs.iter().map(|ci| ci.resolve(er, Delegate!(refto => reverse_index))).collect::<Option<_>>();
+
+		co.and_then(|color_outs| is.map(|inputs| ResolvedRPSubpassDesc { color_outs, inputs }))
 	}
 }
 
@@ -90,11 +89,11 @@ pub struct ResolvedRPSubpassDeps
 }
 impl RPSubpassDeps
 {
-	pub fn resolve(self, parent: &RenderPassData, er: &mut ErrorReporter) -> Option<ResolvedRPSubpassDeps>
+	pub fn resolve(&self, refto: &NamedContents<RPSubpassDesc>, er: &mut ErrorReporter) -> Option<ResolvedRPSubpassDeps>
 	{
-		self.passtrans.resolve(er, Delegate!(parent.subpasses => reverse_index)).map(move |passtrans| ResolvedRPSubpassDeps
+		self.passtrans.resolve(er, Delegate!(refto => reverse_index)).map(move |passtrans| ResolvedRPSubpassDeps
 		{
-			passtrans, access_mask: self.access_mask, stage_bits: self.stage_bits, by_region: self.by_region
+			passtrans, access_mask: self.access_mask.clone(), stage_bits: self.stage_bits.clone(), by_region: self.by_region
 		})
 	}
 }

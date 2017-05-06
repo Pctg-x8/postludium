@@ -308,14 +308,11 @@ impl FromSourceLocated for interlude::ShaderStage {}
 
 	macro_rules! Testing
 	{
-		{$f: expr; $t: expr => $e: expr , $($r: tt)+} =>
+		{} => ();
+		{$f: expr; $t: expr => $e: expr , $($r: tt)*} =>
 		{
 			Testing! { $f; $t => $e }
 			Testing! { $($r)* }
-		};
-		{$f: expr; $t: expr => $e: expr ,} =>
-		{
-			Testing! { $f; $t => $e }
 		};
 		{$f: expr; $t: expr => $e: expr} =>
 		{

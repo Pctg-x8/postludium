@@ -70,6 +70,7 @@ impl<T> NamedContents<T>
 		else { self.0.insert(name.into_owned(), linkref); }
 	}
 	pub fn iter(&self) -> std::slice::Iter<T> { self.1.iter() }
+	pub fn into_iter(self) -> std::vec::IntoIter<T> { self.1.into_iter() }
 	pub fn is_empty(&self) -> bool { self.1.is_empty() }
 
 	pub fn reverse_index(&self, k: &str) -> Option<usize>
@@ -84,6 +85,15 @@ impl<T> NamedContents<T>
 			h.insert(x, n.as_ref());
 		}
 		h
+	}
+	pub fn drain_to_reverse_dict(&mut self) -> (BTreeMap<usize, Vec<String>>, &mut Vec<T>)
+	{
+		let mut h = BTreeMap::new();
+		for (n, x) in self.0.drain()
+		{
+			h.entry(x).or_insert_with(Vec::new).push(n)
+		}
+		(h, &mut self.1)
 	}
 }
 impl<T: Eq> NamedContents<T> where T: std::borrow::Borrow<T> + std::borrow::ToOwned<Owned = T>
@@ -145,8 +155,11 @@ impl<T: Debug + PartialEq> LocationPacked<T>
 	}
 }
 /// SynTree Container: To-From Pair
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Transition<T> { pub from: T, pub to: T }
+impl<T: Clone> Clone for Transition<T> { fn clone(&self) -> Self { Transition { from: self.from.clone(), to: self.to.clone() } } }
+impl<T: PartialEq> PartialEq for Transition<T> { fn eq(&self, other: &Self) -> bool { self.from == other.from && self.to == other.to } }
+impl<T: Eq> Eq for Transition<T> {}
 
 // Generic Elements
 #[derive(Debug, PartialEq)]
@@ -234,7 +247,8 @@ pub struct PreciseRenderPassRef { pub rp: LocationPacked<ConfigInt>, pub subpass
 #[derive(Debug, PartialEq)]
 pub enum ExternalResourceData
 {
-	ImageView { dim: ImageDimension, refname: LocationPacked<String> }, SwapChainViews
+	ImageView { dim: ImageDimension, refname: LocationPacked<String> }, SwapChainViews,
+	Uint(LocationPacked<String>)
 }
 #[derive(Debug, PartialEq)]
 pub enum FramebufferStyle

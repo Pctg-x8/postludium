@@ -26,6 +26,6 @@ fn main()
 	let base_path = arg.parent().unwrap();
 	let mut pdc = devconf::load_configurations(std::borrow::Cow::Borrowed(&arg), |name|
 		std::fs::File::open(base_path.join(name)).and_then(|mut fp| { let mut s = String::new(); fp.read_to_string(&mut s).map(|_| s) }), &mut ColoredReporter).unwrap();
-	let pdc = devconf::DeviceConfigurations::resolve_all(&mut pdc, &mut ColoredReporter);
+	let pdc = devconf::ir::DeviceConfigurations::resolve_all(&mut pdc, &mut ColoredReporter);
 	println!("{:?}", pdc);
 }

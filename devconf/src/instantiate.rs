@@ -136,7 +136,7 @@ impl<T> NamedContentsReverse<T>
 	/// # nc.insert("testB".into(), 1);
 	/// # nc.insert_vunique("testC".into(), std::borrow::Cow::Owned(0));
 	/// # nc.insert_unnamed(2);
-	/// let ncr = NamedContentsReverse::make(&mut nc);
+	/// let ncr = NamedContentsReverse::make(nc);
 	/// # assert!(ncr[0].1.iter().find(|&x| x == "testA").is_some());
 	/// # assert!(ncr[0].1.iter().find(|&x| x == "testC").is_some());
 	/// # assert_eq!(ncr[1], (1, vec!["testB".into()]));
@@ -145,50 +145,139 @@ impl<T> NamedContentsReverse<T>
 	/// ```
 	pub fn make(source: &mut NamedContents<T>) -> Self
 	{
-		let &mut NamedContents(ref mut names, ref mut contents) = source;
-		NamedContentsReverse(contents.drain(..).enumerate().map(|(i, c)|
-		{
-			let (drained, retained) = names.drain().partition(|&(_, lr)| lr == i);
-			*names = retained;
-			(c, drained.into_iter().map(|(n, _)| n).collect())
-		}).collect())
+		let (mut revdict, contents) = source.drain_to_reverse_dict();
+		NamedContentsReverse(contents.drain(..).enumerate().map(|(i, c)| (c, revdict.remove(&i).unwrap())).collect())
 	}
 	fn into_iter(self) -> std::vec::IntoIter<(T, Vec<String>)> { self.0.into_iter() }
 }
 
-use std::ops::Range; use interlude;
-pub type ByteRange = Range<usize>;
-#[derive(Debug)] pub struct DescriptorSetLayout(Vec<Descriptor>);
-#[derive(PartialEq, Eq, Clone, Debug)] pub struct PushConstantLayout(ByteRange, interlude::ShaderStage);
-#[derive(PartialEq, Eq, Clone, Debug)] pub struct PipelineLayout(Vec<usize>, Vec<PushConstantLayout>);
-#[derive(Debug)] pub struct DeviceConfigurations
+pub mod ir
 {
-	pub descriptor_set_layouts: NamedContents<DescriptorSetLayout>,
-	pub pipeline_layout: NamedContents<PipelineLayout>
+	//! Intermediate Representation for DeviceConfiguration
+	use std::ops::Range; use interlude; use interlude::ffi::*;
+	use syntree::{NamedContents, Transition};
+
+	// Primitive Type and Dynamic Types
+	pub type ByteRange = Range<usize>;
+	#[derive(PartialEq, Eq, Clone, Copy, Debug)] pub enum FormatReferer { ScreenFormat }
+	#[derive(PartialEq, Eq, Clone, Copy, Debug)] pub enum ExternU32Referer { ScreenWidth, ScreenHeight }
+	#[derive(PartialEq, Eq, Clone, Debug)] pub enum Format
+	{
+		Constant(VkFormat), BuiltIn(FormatReferer), User(usize)
+	}
+	#[derive(PartialEq, Eq, Clone, Debug)] pub enum UintValue
+	{
+		Constant(u32), BuiltIn(ExternU32Referer), User(usize)
+	}
+
+	// Complex Structures
+	#[derive(Debug)] pub struct DescriptorSetLayout(pub Vec<interlude::Descriptor>);
+	#[derive(Debug, PartialEq, Eq, Clone)] pub struct RenderPassCreationInfo { pub attachments: Vec<usize>, pub subpasses: Vec<usize>, pub deps: Vec<usize> }
+	#[derive(PartialEq, Eq, Clone, Debug)] pub struct PushConstantLayout(pub ByteRange, pub interlude::ShaderStage);
+	#[derive(PartialEq, Eq, Clone, Debug)] pub struct PipelineLayout(pub Vec<usize>, pub Vec<PushConstantLayout>);
+	#[derive(PartialEq, Eq, Clone, Debug)] pub struct AttachmentDesc
+	{
+		pub format: Format, pub layout: Transition<VkImageLayout>, pub clear_on_load: Option<bool>, pub preserve_stored_value: bool
+	}
+
+	#[derive(Debug)] pub struct DeviceConfigurations
+	{
+		pub descriptor_set_layouts: NamedContents<DescriptorSetLayout>,
+		pub pipeline_layout: NamedContents<PipelineLayout>,
+		pub rp_attachment_descs: Vec<AttachmentDesc>,
+		pub rp_subpass_descs: Vec<interlude::PassDesc>,
+		pub rp_subpass_deps: Vec<interlude::PassDependency>,
+		pub renderpasses: NamedContents<RenderPassCreationInfo>
+	}
 }
-impl DeviceConfigurations
+impl LocationPacked<Format>
 {
-	pub fn resolve_all(parsed: &mut ParsedDeviceResources, er: &mut ErrorReporter) -> DeviceConfigurations
+	fn resolve(&self, parsed: &ParsedDeviceResources, err: &mut ErrorReporter) -> Option<ir::Format>
+	{
+		match self
+		{
+			&LocationPacked(_, Format::Value(v)) => Some(ir::Format::Constant(v)),
+			&LocationPacked(_, Format::Ref(ref r)) if r == "ScreenFormat" => Some(ir::Format::BuiltIn(ir::FormatReferer::ScreenFormat)),
+			&LocationPacked(ref loc, Format::Ref(ref r)) => if let Some(x) = parsed.externs.reverse_index(r)
+			{
+				if let &ExternalResourceData::Uint(_) = &parsed.externs[x] { Some(ir::Format::User(x)) }
+				else
+				{
+					err.report_fmt(format_args!("Extern \"{}\" is defined as incompatible type", r), Some(&From::from(loc)));
+					None
+				}
+			}
+			else
+			{
+				err.report_fmt(format_args!("Extern \"{}\" was not found", r), Some(&From::from(loc)));
+				None
+			}
+		}
+	}
+}
+impl RPAttachment
+{
+	fn resolve(&self, parsed: &ParsedDeviceResources, err: &mut ErrorReporter) -> Option<ir::AttachmentDesc>
+	{
+		self.format.resolve(parsed, err).map(|format| ir::AttachmentDesc
+		{
+			format, layout: self.layouts.clone(), clear_on_load: self.clear_on_load, preserve_stored_value: self.preserve_content
+		})
+	}
+}
+fn insert_unique<T: Eq>(v: &mut Vec<T>, value: T) -> usize
+{
+	if let Some((n, _)) = v.iter().enumerate().find(|&(_, v)| *v == value) { n }
+	else { v.push(value); v.len() - 1 }
+}
+impl ir::DeviceConfigurations
+{
+	pub fn resolve_all(parsed: &mut ParsedDeviceResources, er: &mut ErrorReporter) -> Self
 	{
 		let mut pipeline_layout = NamedContents::new();
 		for (content, names) in NamedContentsReverse::make(&mut parsed.pipeline_layouts).into_iter()
 		{
 			if let Some(resolved) = content.resolve(parsed, er)
 			{
-				let linked = PipelineLayout(resolved.descs, resolved.pushconstants.into_iter()
-					.map(|c| &parsed.push_constant_layouts[c]).map(|c| PushConstantLayout(c.range.clone(), c.visibility)).collect());
-				if names.is_empty() { pipeline_layout.insert_unnamed_vunique(Cow::Owned(linked)); }
-				else
+				let linked = ir::PipelineLayout(resolved.descs, resolved.pushconstants.into_iter()
+					.map(|c| &parsed.push_constant_layouts[c]).map(|c| ir::PushConstantLayout(c.range.clone(), c.visibility)).collect());
+				let plx = pipeline_layout.insert_unnamed_vunique(Cow::Owned(linked));
+				for name in names.into_iter().map(Cow::Owned) { pipeline_layout.make_link(name, plx); }
+			}
+		}
+		let (mut rp_attachment_descs, mut rp_subpass_descs, mut rp_subpass_deps, mut renderpasses) = (Vec::new(), Vec::new(), Vec::new(), NamedContents::new());
+		for (RenderPassData { attachments, subpasses, deps }, names) in NamedContentsReverse::make(&mut parsed.renderpasses).into_iter()
+		{
+			let rpas = attachments.iter().map(|a| a.resolve(parsed, er).map(|ar| insert_unique(&mut rp_attachment_descs, ar))).collect::<Option<Vec<_>>>();
+			let rpss = subpasses.iter().map(|a| a.resolve(&attachments, er).map(|ar| insert_unique(&mut rp_subpass_descs, PassDesc
+			{
+				input_attachment_indices: ar.inputs.into_iter().map(|x| AttachmentRef::input(x as u32)).collect(),
+				color_attachment_indices: ar.color_outs.into_iter().map(|x| AttachmentRef::color(x as u32)).collect(),
+				.. Default::default()
+			}))).collect::<Option<Vec<_>>>();
+			let rpds = deps.into_iter().map(|a| a.resolve(&subpasses, er).map(|ar|
+			{
+				let stage_bits = ar.stage_bits.unwrap();
+				insert_unique(&mut rp_subpass_deps, PassDependency
 				{
-					for name in names { pipeline_layout.insert_vunique(Cow::Owned(name), Cow::Borrowed(&linked)); }
-				}
+					src: ar.passtrans.from as u32, dst: ar.passtrans.to as u32,
+					src_stage_mask: stage_bits, dst_stage_mask: stage_bits,
+					src_access_mask: ar.access_mask.from.unwrap(), dst_access_mask: ar.access_mask.to.unwrap(),
+					depend_by_region: ar.by_region
+				})
+			})).collect::<Option<Vec<_>>>();
+
+			if let Some(rpc) = rpas.and_then(|attachments| rpss.and_then(|subpasses| rpds.map(|deps| ir::RenderPassCreationInfo { attachments, subpasses, deps })))
+			{
+				let rpx = renderpasses.insert_unnamed_vunique(Cow::Owned(rpc));
+				for name in names.into_iter().map(Cow::Owned) { renderpasses.make_link(name, rpx); }
 			}
 		}
 
-		DeviceConfigurations
+		ir::DeviceConfigurations
 		{
 			descriptor_set_layouts: unsafe { std::mem::transmute(std::mem::replace(&mut parsed.descriptor_set_layouts, NamedContents::new())) },
-			pipeline_layout
+			pipeline_layout, rp_attachment_descs, rp_subpass_descs, rp_subpass_deps, renderpasses
 		}
 	}
 }
