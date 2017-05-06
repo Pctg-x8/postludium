@@ -1,9 +1,9 @@
 
-use super::ParseError;
+use {std, interlude};
+use error::*;
 use parsetools::*;
 use interlude::ffi::*;
 use super::{ignore_chars, ident_break};
-use std::ops::Range;
 use std::fmt::Debug;
 use syntree::*;
 use parser::{ParserExt, CombinedParser, FromSource, FromSourceArray};
@@ -24,8 +24,8 @@ pub trait FromSourceLocated : FromSource + PartialEq + Debug
 {
 	fn parse_with_location(source: &mut ParseLine) -> LocatedParseResult<Self>
 	{
-		let inloc = source.current();
-		<Self as FromSource>::parse(source).map(|x| LocationPacked(Location(source.line(), inloc), x))
+		let inloc = source.location();
+		<Self as FromSource>::parse(source).map(|x| LocationPacked(inloc, x))
 	}
 }
 /// The array that can be constructed with some structures, returns error when it is found.
@@ -49,7 +49,7 @@ pub trait FromSourceArrayLocated : FromSourceLocated
 					{
 						Some(',') => { source.drop_opt(1).drop_while(ignore_chars); Ok(true) },
 						Some(']') => { source.drop_opt(1); Ok(false) },
-						_ => Err(ParseError::ClosingRequired(source.current()))
+						_ => Err(ParseError::Required(RequestType::Closing, source.current()))
 					}
 				})) {}
 				Ok(sink)
@@ -65,10 +65,10 @@ impl<N: FromSource> FromSource for ConfigInt<N>
 	{
 		match source.front()
 		{
-			Some('$') => source.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::NameRequired(s.current()))
+			Some('$') => source.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::Required(RequestType::Name, s.current()))
 				.map(|x| ConfigInt::Ref(x.clone_as_string())),
-			Some(_) => source.parse::<N>().map(ConfigInt::Value),
-			_ => Err(ParseError::IntValueRequired(source.current()))
+			Some(_) => source.parse::<N>().map(ConfigInt::Value).map_err(|e| e.xc_require_type(RequestType::ConfigInt)),
+			_ => Err(ParseError::Required(RequestType::ConfigInt, source.current()))
 		}
 	}
 }
@@ -97,10 +97,10 @@ impl FromSourceArrayLocated for ConfigInt
 							{
 								Some(',') => parse_loop(source.drop_opt(1), sink),
 								Some(']') => { source.drop_opt(1); Ok(()) },
-								_ => Err(ParseError::DelimiterRequired(source.current()))
+								_ => Err(ParseError::Required(RequestType::Delimiter, source.current()))
 							}
 						}),
-						None => Err(ParseError::ClosingRequired(source.current()))
+						None => Err(ParseError::Required(RequestType::Closing, source.current()))
 					}
 				}
 				parse_loop(source, &mut sink).map(|_| sink)
@@ -114,7 +114,7 @@ impl NumericLiteral
 {
 	pub fn parse(input: &mut ParseLine, default32: bool) -> LocatedParseResult<Self>
 	{
-		let startloc = input.current();
+		let inloc = input.location();
 		let s =
 		{
 			let ipart = input.take_while(|c| c.is_digit(10));
@@ -148,7 +148,7 @@ impl NumericLiteral
 		else
 		{
 			s.parse::<i64>().map_err(|e| ParseError::NumericParseError(e, l)).map(NumericLiteral::Integer)
-		}).map(|v| LocationPacked(Location(input.line(), startloc), v))
+		}).map(|v| LocationPacked(inloc, v))
 	}
 }
 impl FromSource for AssetResource
@@ -178,25 +178,6 @@ impl FromSource for AssetResource
 }
 impl FromSourceLocated for AssetResource {}
 
-// Bytesize Range
-pub fn parse_usize_range(source: &mut ParseLine) -> LocatedParseResult<Range<usize>>
-{
-	let s = source.take_while(|c| c.is_digit(10));
-	if s.is_empty() { Err(ParseError::BytesizeRequired(s.current())) }
-	else if source.drop_while(ignore_chars).starts_with(&['.', '.'])
-	{
-		let e = source.drop_opt(2).drop_while(ignore_chars).take_while(|c| c.is_digit(10));
-		if e.is_empty() { Err(ParseError::BytesizeRequired(e.current())) }
-		else
-		{
-			let (sn, en) = (s.clone_as_string().parse::<usize>(), e.clone_as_string().parse::<usize>());
-			sn.map_err(|se| ParseError::NumericParseError(se, s.current())).and_then(|sn|
-				en.map_err(|ee| ParseError::NumericParseError(ee, e.current())).map(|en| LocationPacked(s.location(), sn .. en)))
-		}
-	}
-	else { Err(ParseError::Expected("Bytesize Range".into(), source.current())) }
-}
-
 impl FromSource for Format
 {
 	fn object_name() -> Cow<'static, str> { "Format".into() }
@@ -205,7 +186,7 @@ impl FromSource for Format
 		if source.front() == Some('$')
 		{
 			let s = source.drop_opt(1).take_until(ident_break);
-			if s.is_empty() { Err(ParseError::NameRequired(s.current())) }
+			if s.is_empty() { Err(ParseError::Required(RequestType::Name, s.current())) }
 			else { Ok(Format::Ref(s.clone_as_string())) }
 		}
 		else
@@ -231,150 +212,94 @@ impl FromSource for Format
 				("BLOCKCOMPRESSION4", "SNORM") | ("BC4", "SNORM") => Ok(VkFormat::BC4_SNORM_BLOCK),
 				("BLOCKCOMPRESSION5", "UNORM") | ("BC5", "UNORM") => Ok(VkFormat::BC5_UNORM_BLOCK),
 				("BLOCKCOMPRESSION5", "SNORM") | ("BC5", "SNORM") => Ok(VkFormat::BC5_SNORM_BLOCK),
-				_ => Err(ParseError::UnknownFormat(bits.current()))
+				_ => Err(ParseError::UnknownEnumValue(EnumType::Format, bits.current()))
 			}.map(Format::Value)
 		}
 	}
 }
 impl FromSourceLocated for Format {}
-/*
-impl FromSourceLocated for Format
-{
-	fn parse(source: &mut ParseLine) -> LocatedParseResult<Self>
-	{
-		let inloc = source.current();
-		<Self as FromSource>::parse(source).map(|f| LocationPacked(source.line(), inloc, f))
-	}
-}
-*/
 
-lazy_static!
-{
-	static ref CAO: Vec<char> = "ColorAttachmentOptimal".chars().collect();
-	static ref SROO: Vec<char> = "ShaderReadOnlyOptimal".chars().collect();
-}
 pub fn parse_image_layout(source: &mut ParseLine) -> LocatedParseResult<VkImageLayout>
 {
 	let name = source.take_until(ident_break);
-	if name == CAO[..] { Ok(LocationPacked(name.location(), VkImageLayout::ColorAttachmentOptimal)) }
-	else if name == SROO[..] { Ok(LocationPacked(name.location(), VkImageLayout::ShaderReadOnlyOptimal)) }
-	else { Err(ParseError::UnknownImageLayout(name.current())) }
+	match name.chars()
+	{
+		&['C', 'o', 'l', 'o', 'r', 'A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't', 'O', 'p', 't', 'i', 'm', 'a', 'l'] =>
+			Ok(LocationPacked(name.location(), VkImageLayout::ColorAttachmentOptimal)),
+		&['S', 'h', 'a', 'd', 'e', 'r', 'R', 'e', 'a', 'd', 'O', 'n', 'l', 'y', 'O', 'p', 't', 'i', 'm', 'a', 'l'] =>
+			Ok(LocationPacked(name.location(), VkImageLayout::ShaderReadOnlyOptimal)),
+		_ => Err(ParseError::UnknownEnumValue(EnumType::ImageLayout, name.current()))
+	}
 }
 
-lazy_static!
+/// The trait for flag types provides empty flag value
+pub trait EmptyBits { fn empty_bits() -> Self; }
+impl EmptyBits for VkPipelineStageFlags { fn empty_bits() -> Self { 0 } }
+impl EmptyBits for interlude::AccessFlags { fn empty_bits() -> Self { unsafe { std::mem::transmute(0) } } }
+impl EmptyBits for interlude::ShaderStage { fn empty_bits() -> Self { unsafe { std::mem::transmute(0u8) } } }
+
+/// F/*
+fn parse_flags<F: EmptyBits + std::ops::BitOrAssign, DF>(source: &mut ParseLine, identifier: DF) -> Result<F, ParseError>
+	where DF: Fn(&ParseLine) -> Result<F, ParseError>
 {
-	static ref TOP: Vec<char> = "TopOfPipe".chars().collect();
-	static ref FSS: Vec<char> = "FragmentShaderStage".chars().collect();
-	static ref BOP: Vec<char> = "BottomOfPipe".chars().collect();
-}
-pub fn parse_pipeline_stage_bits(source: &mut ParseLine) -> LocatedParseResult<VkPipelineStageFlags>
-{
-	fn determine_const(input: &ParseLine) -> Option<VkPipelineStageFlags>
-	{
-		if *input == TOP[..] { Some(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT) }
-		else if *input == FSS[..] { Some(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT) }
-		else if *input == BOP[..] { Some(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT) }
-		else { None }
-	}
-	fn recursive<'s>(input: &mut ParseLine<'s>, mut accum: VkPipelineStageFlags) -> Result<VkPipelineStageFlags, ParseError>
+	fn recursive<F: EmptyBits + std::ops::BitOrAssign, DF>(input: &mut ParseLine, mut accum: F, identifier: DF) -> Result<F, ParseError>
+		where DF: Fn(&ParseLine) -> Result<F, ParseError>
 	{
 		if input.is_empty() { Ok(accum) }
 		else
 		{
-			let flag = input.take_until(ident_break);
-			determine_const(&flag).ok_or(ParseError::UnknownPipelineStageFlag(flag.current())).and_then(|f|
-			{
-				accum |= f;
-				if input.drop_while(ignore_chars).front() == Some('/')
-				{
-					recursive(input.drop_opt(1).drop_while(ignore_chars), accum)
-				}
-				else { Ok(accum) }
-			})
+			accum |= identifier(&input.take_until(ident_break))?;
+			if input.drop_while(ignore_chars).front() == Some('/') { recursive(input.drop_opt(1).drop_while(ignore_chars), accum, identifier) }
+			else { Ok(accum) }
 		}
 	}
-	let startloc = source.current();
-	recursive(source, 0).map(|f| LocationPacked(Location(source.line(), startloc), f))
+	recursive(source, F::empty_bits(), identifier)
 }
-lazy_static!
+
+pub fn parse_pipeline_stage_bits(source: &mut ParseLine) -> LocatedParseResult<VkPipelineStageFlags>
 {
-	static ref CAW: Vec<char> = "ColorAttachmentWrite".chars().collect();
-	static ref SR: Vec<char> = "ShaderRead".chars().collect();
+	let inloc = source.location();
+	parse_flags(source, |input| match input.chars()
+	{
+		&['T', 'o', 'p', 'O', 'f', 'P', 'i', 'p', 'e'] => Ok(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT),
+		&['F', 'r', 'a', 'g', 'm', 'e', 'n', 't', 'S', 'h', 'a', 'd', 'e', 'r', 'S', 't', 'a', 'g', 'e'] => Ok(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+		&['B', 'o', 't', 't', 'o', 'm', 'O', 'f', 'P', 'i', 'p', 'e'] => Ok(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT),
+		_ => Err(ParseError::UnknownEnumValue(EnumType::PipelineStageFlag, input.current()))
+	}).map(|x| LocationPacked(inloc, x))
 }
-impl FromSource for AccessFlags
+impl FromSource for interlude::AccessFlags
 {
 	fn object_name() -> Cow<'static, str> { "Access Flags".into() }
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
-		fn determine_const(input: &ParseLine) -> Option<VkAccessFlags>
+		use interlude::AccessFlags::*;
+		parse_flags(source, |input| match input.chars()
 		{
-			if *input == CAW[..] { Some(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT) }
-			else if *input == SR[..] { Some(VK_ACCESS_SHADER_READ_BIT) }
-			else { None }
-		}
-		fn recursive<'s>(input: &mut ParseLine<'s>, mut accum: AccessFlags) -> Result<AccessFlags, ParseError>
-		{
-			if input.is_empty() { Ok(accum) }
-			else
-			{
-				let flag = input.take_until(ident_break);
-				determine_const(&flag).ok_or(ParseError::UnknownAccessFlag(flag.current())).and_then(|f|
-				{
-					accum.0 |= f;
-					if input.drop_while(ignore_chars).front() == Some('/')
-					{
-						recursive(input.drop_opt(1).drop_while(ignore_chars), accum)
-					}
-					else { Ok(accum) }
-				})
-			}
-		}
-		recursive(source, AccessFlags(0))
+			&['C', 'o', 'l', 'o', 'r', 'A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't', 'W', 'r', 'i', 't', 'e'] => Ok(ColorAttachmentWrite),
+			&['S', 'h', 'a', 'd', 'e', 'r', 'R', 'e', 'a', 'd'] => Ok(ShaderRead),
+			_ => Err(ParseError::UnknownEnumValue(EnumType::AccessFlag, input.current()))
+		})
 	}
 }
-impl FromSourceLocated for AccessFlags {}
-lazy_static!
+impl FromSourceLocated for interlude::AccessFlags {}
+impl FromSource for interlude::ShaderStage
 {
-	static ref VERTEX: Vec<char> = "Vertex".chars().collect();
-	static ref GEOMETRY: Vec<char> = "Geometry".chars().collect();
-	static ref TESSCONTROL: Vec<char> = "TessControl".chars().collect();
-	static ref TESSEVALUATION: Vec<char> = "TessEvaluation".chars().collect();
-	static ref FRAGMENT: Vec<char> = "Fragment".chars().collect();
-}
-impl FromSource for ShaderStageFlags
-{
-	fn object_name() -> Cow<'static, str> { "Shader Stage Flags".into() }
+	fn object_name() -> Cow<'static, str> { "Shader Stage".into() }
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
-		fn determine_flag(input: &ParseLine) -> Option<VkShaderStageFlags>
+		use interlude::ShaderStage::*;
+		parse_flags(source, |input| match input.chars()
 		{
-			PartialEqualityMatchMap!(*input;
-			{
-				VERTEX[..] => Some(VK_SHADER_STAGE_VERTEX_BIT),
-				GEOMETRY[..] => Some(VK_SHADER_STAGE_GEOMETRY_BIT),
-				TESSCONTROL[..] => Some(VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT),
-				TESSEVALUATION[..] => Some(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT),
-				FRAGMENT[..] => Some(VK_SHADER_STAGE_FRAGMENT_BIT);
-				_ => None
-			})
-		}
-		fn recursive(source: &mut ParseLine, mut flags: ShaderStageFlags) -> Result<ShaderStageFlags, ParseError>
-		{
-			let flag = source.take_until(ident_break);
-			determine_flag(&flag).ok_or(ParseError::UnknownShaderStageFlag(flag.current())).and_then(|f|
-			{
-				flags.0 |= f;
-				if source.drop_while(ignore_chars).front() == Some('/')
-				{
-					recursive(source.drop_opt(1).drop_while(ignore_chars), flags)
-				}
-				else { Ok(flags) }
-			})
-		}
-		recursive(source, ShaderStageFlags(0))
+			&['V', 'e', 'r', 't', 'e', 'x'] => Ok(Vertex),
+			&['T', 'e', 's', 's', 'C', 'o', 'n', 't', 'r', 'o', 'l'] => Ok(TessControl),
+			&['T', 'e', 's', 's', 'E', 'v', 'a', 'l', 'u', 'a', 't', 'i', 'o', 'n'] => Ok(TessEvaluation),
+			&['G', 'e', 'o', 'm', 'e', 't', 'r', 'y'] => Ok(Geometry),
+			&['F', 'r', 'a', 'g', 'm', 'e', 'n', 't'] => Ok(Fragment),
+			_ => Err(ParseError::UnknownEnumValue(EnumType::ShaderStageFlag, input.current()))
+		})
 	}
 }
-impl FromSourceLocated for ShaderStageFlags {}
+impl FromSourceLocated for interlude::ShaderStage {}
 
 #[cfg(test)] #[macro_use] mod tests
 {
@@ -401,30 +326,30 @@ impl FromSourceLocated for ShaderStageFlags {}
 	{
 		Testing!
 		{
-			ConfigInt::parse_with_location; "10" => Ok(LocationPacked(Location(1, 0), ConfigInt::Value(10))),
-			ConfigInt::parse_with_location; "$TA," => Ok(LocationPacked(Location(1, 0), ConfigInt::Ref("TA".into()))),
-			ConfigInt::parse_with_location; "$ " => Err(ParseError::NameRequired(1)),
-			ConfigInt::parse_with_location; "T" => Err(ParseError::IntValueRequired(0)),
-			ConfigInt::parse_array_with_location; "10" => Ok(vec![LocationPacked(Location(1, 0), ConfigInt::Value(10))]),
+			ConfigInt::parse_with_location; "10" => Ok(LocationPacked(Location(1, 1), ConfigInt::Value(10))),
+			ConfigInt::parse_with_location; "$TA," => Ok(LocationPacked(Location(1, 1), ConfigInt::Ref("TA".into()))),
+			ConfigInt::parse_with_location; "$ " => Err(ParseError::Required(RequestType::Name, 1)),
+			ConfigInt::parse_with_location; "T" => Err(ParseError::Required(RequestType::ConfigInt, 0)),
+			ConfigInt::parse_array_with_location; "10" => Ok(vec![LocationPacked(Location(1, 1), ConfigInt::Value(10))]),
 			ConfigInt::parse_array_with_location; "[1, 2]~" => Ok(vec![
-				LocationPacked(Location(1, 1), ConfigInt::Value(1)), LocationPacked(Location(1, 4), ConfigInt::Value(2))
+				LocationPacked(Location(1, 2), ConfigInt::Value(1)), LocationPacked(Location(1, 5), ConfigInt::Value(2))
 			]),
-			ConfigInt::parse_array_with_location; "[1,,]" => Ok(vec![LocationPacked(Location(1, 1), ConfigInt::Value(1))]),
-			ConfigInt::parse_array_with_location; "[1 2]" => Err(ParseError::DelimiterRequired(3)),
-			ConfigInt::parse_array_with_location; "[1," => Err(ParseError::ClosingRequired(3))
+			ConfigInt::parse_array_with_location; "[1,,]" => Ok(vec![LocationPacked(Location(1, 2), ConfigInt::Value(1))]),
+			ConfigInt::parse_array_with_location; "[1 2]" => Err(ParseError::Required(RequestType::Delimiter, 3)),
+			ConfigInt::parse_array_with_location; "[1," => Err(ParseError::Required(RequestType::Closing, 3))
 		}
 	}
 	#[test] fn parse_numeric()
 	{
 		Testing!
 		{
-			PartialApply1!(NumericLiteral::parse; false); "10" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Integer(10))),
-			PartialApply1!(NumericLiteral::parse; false); "10.0" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Floating(10.0))),
-			PartialApply1!(NumericLiteral::parse; true); "10.0" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Floating32(10.0))),
-			PartialApply1!(NumericLiteral::parse; false); "10f" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Floating(10.0))),
-			PartialApply1!(NumericLiteral::parse; true); "10f" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Floating32(10.0))),
-			PartialApply1!(NumericLiteral::parse; false); "10f32" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Floating32(10.0))),
-			PartialApply1!(NumericLiteral::parse; true); "10f64" => Ok(LocationPacked(Location(1, 0), NumericLiteral::Floating(10.0))),
+			PartialApply1!(NumericLiteral::parse; false); "10"    => Ok(LocationPacked(Location(1, 1), NumericLiteral::Integer(10))),
+			PartialApply1!(NumericLiteral::parse; false); "10.0"  => Ok(LocationPacked(Location(1, 1), NumericLiteral::Floating(10.0))),
+			PartialApply1!(NumericLiteral::parse; true);  "10.0"  => Ok(LocationPacked(Location(1, 1), NumericLiteral::Floating32(10.0))),
+			PartialApply1!(NumericLiteral::parse; false); "10f"   => Ok(LocationPacked(Location(1, 1), NumericLiteral::Floating(10.0))),
+			PartialApply1!(NumericLiteral::parse; true);  "10f"   => Ok(LocationPacked(Location(1, 1), NumericLiteral::Floating32(10.0))),
+			PartialApply1!(NumericLiteral::parse; false); "10f32" => Ok(LocationPacked(Location(1, 1), NumericLiteral::Floating32(10.0))),
+			PartialApply1!(NumericLiteral::parse; true);  "10f64" => Ok(LocationPacked(Location(1, 1), NumericLiteral::Floating(10.0))),
 			PartialApply1!(NumericLiteral::parse; false); "" => Err(ParseError::Expected("Numerical Value".into(), 0))
 		}
 	}
@@ -435,17 +360,7 @@ impl FromSourceLocated for ShaderStageFlags {}
 			AssetResource::parse; "!shaders.PureF" => Ok(AssetResource::PathRef(vec!["shaders".into(), "PureF".into()])),
 			AssetResource::parse; "$en" => Ok(AssetResource::IntRef(ConfigInt::Ref("en".into()))),
 			AssetResource::parse; "!" => Err(ParseError::Expected("Asset Path".into(), 1)),
-			AssetResource::parse; "~" => Err(ParseError::IntValueRequired(0))
-		}
-	}
-	#[test] fn usize_range()
-	{
-		Testing!
-		{
-			parse_usize_range; "0 .. 16" => Ok(LocationPacked(Location(1, 0), 0usize .. 16usize)),
-			parse_usize_range; "n .. m" => Err(ParseError::BytesizeRequired(0)),
-			parse_usize_range; "4" => Err(ParseError::Expected("Bytesize Range".into(), 1)),
-			parse_usize_range; "4 ..n" => Err(ParseError::BytesizeRequired(4))
+			AssetResource::parse; "~" => Err(ParseError::Required(RequestType::ConfigInt, 0))
 		}
 	}
 	#[test] fn parse_pixel_format()
@@ -456,43 +371,43 @@ impl FromSourceLocated for ShaderStageFlags {}
 			Format::parse; "R8G8b8A8 Unorm" => Ok(Format::Value(VkFormat::R8G8B8A8_UNORM)),
 			Format::parse; "BlockCompression5 Unorm" => Ok(Format::Value(VkFormat::BC5_UNORM_BLOCK)),
 			Format::parse; "$ScreenFormat" => Ok(Format::Ref("ScreenFormat".into())),
-			Format::parse; "R8G8B8A8 SF" => Err(ParseError::UnknownFormat(0))
+			Format::parse; "R8G8B8A8 SF" => Err(ParseError::UnknownEnumValue(EnumType::Format, 0))
 		}
 	}
 	#[test] fn image_layouts()
 	{
 		Testing!
 		{
-			parse_image_layout; "ColorAttachmentOptimal:" => Ok(LocationPacked(Location(1, 0), VkImageLayout::ColorAttachmentOptimal)),
-			parse_image_layout; "Shaders" => Err(ParseError::UnknownImageLayout(0))
+			parse_image_layout; "ColorAttachmentOptimal:" => Ok(LocationPacked(Location(1, 1), VkImageLayout::ColorAttachmentOptimal)),
+			parse_image_layout; "Shaders" => Err(ParseError::UnknownEnumValue(EnumType::ImageLayout, 0))
 		}
 	}
 	#[test] fn shader_stage_bits()
 	{
 		Testing!
 		{
-			ShaderStageFlags::parse; "Vertex / TessEvaluation" => Ok(ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)),
-			ShaderStageFlags::parse; "Geometry" => Ok(ShaderStageFlags(VK_SHADER_STAGE_GEOMETRY_BIT)),
-			ShaderStageFlags::parse; "GEOMETRY" => Err(ParseError::UnknownShaderStageFlag(0)),
-			ShaderStageFlags::parse; "Vertex/" => Err(ParseError::UnknownShaderStageFlag(7))
+			interlude::ShaderStage::parse; "Vertex / TessEvaluation" => Ok(interlude::ShaderStage::Vertex | interlude::ShaderStage::TessEvaluation),
+			interlude::ShaderStage::parse; "Geometry" => Ok(interlude::ShaderStage::Geometry),
+			interlude::ShaderStage::parse; "GEOMETRY" => Err(ParseError::UnknownEnumValue(EnumType::ShaderStageFlag, 0)),
+			interlude::ShaderStage::parse; "Vertex/" => Ok(interlude::ShaderStage::Vertex)
 		}
 	}
 	#[test] fn pipeline_stage_bits()
 	{
 		Testing!
 		{
-			parse_pipeline_stage_bits; "FragmentShaderStage" => Ok(LocationPacked(Location(1, 0), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)),
-			parse_pipeline_stage_bits; "TopOfPipe / BottomOfPipe" => Ok(LocationPacked(Location(1, 0), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)),
-			parse_pipeline_stage_bits; "a" => Err(ParseError::UnknownPipelineStageFlag(0))
+			parse_pipeline_stage_bits; "FragmentShaderStage" => Ok(LocationPacked(Location(1, 1), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)),
+			parse_pipeline_stage_bits; "TopOfPipe / BottomOfPipe" => Ok(LocationPacked(Location(1, 1), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)),
+			parse_pipeline_stage_bits; "a" => Err(ParseError::UnknownEnumValue(EnumType::PipelineStageFlag, 0))
 		}
 	}
 	#[test] fn access_mask()
 	{
 		Testing!
 		{
-			AccessFlags::parse; "ColorAttachmentWrite" => Ok(AccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)),
-			AccessFlags::parse; "ColorAttachmentWrite / ShaderRead" => Ok(AccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT)),
-			AccessFlags::parse; "a" => Err(ParseError::UnknownAccessFlag(0))
+			interlude::AccessFlags::parse; "ColorAttachmentWrite" => Ok(interlude::AccessFlags::ColorAttachmentWrite),
+			interlude::AccessFlags::parse; "ColorAttachmentWrite / ShaderRead" => Ok(interlude::AccessFlags::ColorAttachmentWrite | interlude::AccessFlags::ShaderRead),
+			interlude::AccessFlags::parse; "a" => Err(ParseError::UnknownEnumValue(EnumType::AccessFlag, 0))
 		}
 	}
 }

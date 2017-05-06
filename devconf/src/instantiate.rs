@@ -4,8 +4,10 @@ use interlude::ffi::*;
 use std::ops::Deref;
 use itertools::Itertools;
 use syntree::*;
-use {std, syntree};
+use std;
+use ErrorReporter;
 use std::io::prelude::*;
+use std::borrow::Cow;
 
 macro_rules! println_err
 {
@@ -77,7 +79,7 @@ impl RenderPassInstantiate for RenderPassData
 		{
 			src: p.passtrans.from.value_ref().unwrap_as_resolved(), dst: p.passtrans.to.value_ref().unwrap_as_resolved(),
 			src_stage_mask: *p.stage_bits.value_ref(), dst_stage_mask: *p.stage_bits.value_ref(),
-			src_access_mask: p.access_mask.from.value_ref().0, dst_access_mask: p.access_mask.to.value_ref().0,
+			src_access_mask: *p.access_mask.from.value_ref(), dst_access_mask: *p.access_mask.to.value_ref(),
 			depend_by_region: p.by_region
 		}).collect_vec();
 
@@ -115,18 +117,78 @@ impl RenderPassInstantiate for PresentedRenderPassData
 	}
 }
 
-pub struct PipelineLayoutInstances { index_map: Vec<usize>, instances: Vec<PipelineLayout> }
-impl PipelineLayoutInstances
+/// Array of Contents that named once or more.
+pub struct NamedContentsReverse<T>(Vec<(T, Vec<String>)>);
+impl<T> std::ops::Deref for NamedContentsReverse<T> { type Target = [(T, Vec<String>)]; fn deref(&self) -> &Self::Target { &self.0 } }
+impl<T> NamedContentsReverse<T>
 {
-	fn instantiate(engine: &GraphicsInterface, pipelines: &NamedContents<syntree::PipelineLayout>) -> Self
+	/// Make object from source by draining contents and names
+	///
+	/// # Examples
+	/// ```
+	/// # extern crate devconf;
+	/// # fn main() {
+	/// use devconf::NamedContentsReverse;
+	/// # use devconf::syntree::NamedContents;
+	///
+	/// # let mut nc = NamedContents::new();
+	/// # nc.insert("testA".into(), 0);
+	/// # nc.insert("testB".into(), 1);
+	/// # nc.insert_vunique("testC".into(), std::borrow::Cow::Owned(0));
+	/// # nc.insert_unnamed(2);
+	/// let ncr = NamedContentsReverse::make(&mut nc);
+	/// # assert!(ncr[0].1.iter().find(|&x| x == "testA").is_some());
+	/// # assert!(ncr[0].1.iter().find(|&x| x == "testC").is_some());
+	/// # assert_eq!(ncr[1], (1, vec!["testB".into()]));
+	/// # assert_eq!(ncr[2], (2, Vec::new()));
+	/// # }
+	/// ```
+	pub fn make(source: &mut NamedContents<T>) -> Self
 	{
-		let mut sink = PipelineLayoutInstances { index_map: Vec::new(), instances: Vec::new() };
-
-		/*for (index, &syntree::PipelineLayout { ref descs, ref pushconstants }) in pipelines.iter().enumerate()
+		let &mut NamedContents(ref mut names, ref mut contents) = source;
+		NamedContentsReverse(contents.drain(..).enumerate().map(|(i, c)|
 		{
+			let (drained, retained) = names.drain().partition(|&(_, lr)| lr == i);
+			*names = retained;
+			(c, drained.into_iter().map(|(n, _)| n).collect())
+		}).collect())
+	}
+	fn into_iter(self) -> std::vec::IntoIter<(T, Vec<String>)> { self.0.into_iter() }
+}
 
-		}*/
+use std::ops::Range; use interlude;
+pub type ByteRange = Range<usize>;
+#[derive(Debug)] pub struct DescriptorSetLayout(Vec<Descriptor>);
+#[derive(PartialEq, Eq, Clone, Debug)] pub struct PushConstantLayout(ByteRange, interlude::ShaderStage);
+#[derive(PartialEq, Eq, Clone, Debug)] pub struct PipelineLayout(Vec<usize>, Vec<PushConstantLayout>);
+#[derive(Debug)] pub struct DeviceConfigurations
+{
+	pub descriptor_set_layouts: NamedContents<DescriptorSetLayout>,
+	pub pipeline_layout: NamedContents<PipelineLayout>
+}
+impl DeviceConfigurations
+{
+	pub fn resolve_all(parsed: &mut ParsedDeviceResources, er: &mut ErrorReporter) -> DeviceConfigurations
+	{
+		let mut pipeline_layout = NamedContents::new();
+		for (content, names) in NamedContentsReverse::make(&mut parsed.pipeline_layouts).into_iter()
+		{
+			if let Some(resolved) = content.resolve(parsed, er)
+			{
+				let linked = PipelineLayout(resolved.descs, resolved.pushconstants.into_iter()
+					.map(|c| &parsed.push_constant_layouts[c]).map(|c| PushConstantLayout(c.range.clone(), c.visibility)).collect());
+				if names.is_empty() { pipeline_layout.insert_unnamed_vunique(Cow::Owned(linked)); }
+				else
+				{
+					for name in names { pipeline_layout.insert_vunique(Cow::Owned(name), Cow::Borrowed(&linked)); }
+				}
+			}
+		}
 
-		sink
+		DeviceConfigurations
+		{
+			descriptor_set_layouts: unsafe { std::mem::transmute(std::mem::replace(&mut parsed.descriptor_set_layouts, NamedContents::new())) },
+			pipeline_layout
+		}
 	}
 }

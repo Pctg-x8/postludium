@@ -1,20 +1,21 @@
 //! Postludium: Device Configuration Processor: Parser
 
-use std;
 use std::ops::Range;
-use std::num::{ParseIntError, ParseFloatError};
 use std::collections::BTreeMap;
 use parsetools::*;
-use std::borrow::Cow;
+use std::borrow::*;
 use interlude::ffi::*;
 use std::path::PathBuf;
 use interlude::*;
+use interlude;
 
 pub use items::*;
 pub use hobjects::*;
 
 use syntree::*;
 use syntree::PipelineLayout;
+
+use error::*;
 
 // Misc
 #[derive(Debug, PartialEq)]
@@ -37,92 +38,6 @@ pub struct Let<T>(T);
 impl<T> Let<T>
 {
 	pub fn _in<F, R>(self, binder: F) -> R where F: FnOnce(T) -> R { binder(self.0) }
-}
-
-// --- Parse Error --- //
-#[derive(Debug, PartialEq)]
-pub enum ParseError
-{
-	NameRequired(usize),
-	UnknownDeviceResource(usize),
-	UnknownFormat(usize),
-	UnknownImageLayout(usize),
-	IntValueRequired(usize),
-	UnknownRenderPassAttachmentOptions(usize),
-	ImageLayoutRequired(usize),
-	DirectionRequired(usize),
-	NumericParseError(ParseIntError, usize),
-	FloatingParseError(ParseFloatError, usize),
-	DelimiterRequired(usize),
-	ClosingRequired(usize),
-	DefinitionOverrided,
-	CorruptedSubpassDesc(usize),
-	UnknownPipelineStageFlag(usize),
-	UnknownAccessFlag(usize),
-	Expected(Cow<'static, str>, usize),
-	UnknownConfig(&'static str),
-	ConfigRequired(&'static str),
-	UnknownExternalResource(usize),
-	UnknownClearMode(usize),
-	FormatRequired(usize),
-	UnknownObjectRef(&'static str, usize),
-	UnknownShaderStageFlag(usize),
-	UnknownDescriptorKind(usize),
-	BytesizeRequired(usize),
-	UnknownPrimitiveTopology(bool, usize),
-	NameNotAllowed(usize),
-	EntryDuplicated(Cow<'static, str>),
-	UnknownComponentSwizzle(usize),
-	UnknownUsageBits(&'static str, usize),
-	UnknownFilterType(usize)
-}
-pub struct ParseErrorWithLine(ParseError, usize);
-trait WithLine<T, E> { fn with_line(self, line: usize) -> Result<T, E>; }
-impl<T> WithLine<T, ParseErrorWithLine> for Result<T, ParseError>
-{
-	fn with_line(self, line: usize) -> Result<T, ParseErrorWithLine> { self.map_err(|e| ParseErrorWithLine(e, line)) }
-}
-impl std::fmt::Debug for ParseErrorWithLine
-{
-	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
-	{
-		match &self.0
-		{
-			&ParseError::NameRequired(p) => write!(fmt, "Name required following $ at line {}, col {}", self.1, p),
-			&ParseError::UnknownDeviceResource(p) => write!(fmt, "Unknown Device Resource was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownFormat(p) => write!(fmt, "Unknown Format was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownImageLayout(p) => write!(fmt, "Unknown Image Layout was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownRenderPassAttachmentOptions(p) => write!(fmt, "Unknown Options for RenderPass Attachment was found at line {}, col {}", self.1, p),
-			&ParseError::ImageLayoutRequired(p) => write!(fmt, "Image Layout required at line {}, col {}", self.1, p),
-			&ParseError::DirectionRequired(p) => write!(fmt, "Direction Token(->, <-, To or From) required at line {}, col {}", self.1, p),
-			&ParseError::DelimiterRequired(p) => write!(fmt, "Delimiter required at line {}, col {}", self.1, p),
-			&ParseError::ClosingRequired(p) => write!(fmt, "Closing required at line {}, col {}", self.1, p),
-			&ParseError::BytesizeRequired(p) => write!(fmt, "Bytesize required at line {}, col {}", self.1, p),
-			&ParseError::DefinitionOverrided => write!(fmt, "Multiple definitions are found at line {}", self.1),
-			&ParseError::CorruptedSubpassDesc(p) => write!(fmt, "Some Error are found parsing SubpassDesc at line {}, col {}", self.1, p),
-			&ParseError::IntValueRequired(p) => write!(fmt, "Integer or ConfigRef required at line {}, col {}", self.1, p),
-			&ParseError::UnknownPipelineStageFlag(p) => write!(fmt, "Unknown Pipeline Stage Flag was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownAccessFlag(p) => write!(fmt, "Unknown Access Mask Flag was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownExternalResource(p) => write!(fmt, "Unknown External Resource was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownClearMode(p) => write!(fmt, "Unknown Clear Mode was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownShaderStageFlag(p) => write!(fmt, "Unknown Shader Stage Flag was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownDescriptorKind(p) => write!(fmt, "Unknown Descriptor Kind was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownComponentSwizzle(p) => write!(fmt, "Unknown Swizzling Component was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownUsageBits(f, p) => write!(fmt, "Unknown Usage Bits for {} was found at line {}, col {}", f, self.1, p),
-			&ParseError::UnknownFilterType(p) => write!(fmt, "Unknown Filter Type was found at line {}, col {}", self.1, p),
-			&ParseError::FormatRequired(p) => write!(fmt, "Format required for RenderPass Attachment at line {}, col {}", self.1, p),
-			&ParseError::UnknownPrimitiveTopology(true, p) => write!(fmt, "Unknown Primitive Topology with Adjacency was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownPrimitiveTopology(false, p) => write!(fmt, "Unknown Primitive Topology was found at line {}, col {}", self.1, p),
-			&ParseError::UnknownObjectRef(n, p) => write!(fmt, "Unknown {} ref at line {}, col {}", n, self.1, p),
-			&ParseError::NumericParseError(ref n, p) => write!(fmt, "NumericParseError: {} at line {}, col {}", n, self.1, p),
-			&ParseError::FloatingParseError(ref n, p) => write!(fmt, "FloatingParseError: {} at line {}, col {}", n, self.1, p),
-			&ParseError::Expected(ref s, p) => write!(fmt, "Expected {}, but it was not found at line {}, col {}", s, self.1, p),
-			&ParseError::UnknownConfig(s) => write!(fmt, "Unknown Config for {} was found at line {}", s, self.1),
-			&ParseError::ConfigRequired(c) => write!(fmt, "Configuration \"{}\" required at line {}", c, self.1),
-			&ParseError::NameNotAllowed(p) => write!(fmt, "Naming not allowed for the configuration at line {}, col {}", self.1, p),
-			&ParseError::EntryDuplicated(ref n) => write!(fmt, "Entry {} is duplicated at line {}", n, self.1)
-		}
-	}
 }
 
 // --- Parsers --- //
@@ -158,7 +73,7 @@ pub trait FromSourceArray : FromSource
 					{
 						Some(',') => { source.drop_opt(1).drop_while(ignore_chars); Ok(true) },
 						Some(']') => { source.drop_opt(1); Ok(false) },
-						_ => Err(ParseError::ClosingRequired(source.current()))
+						_ => Err(ParseError::Required(RequestType::Closing, source.current()))
 					}
 				})) {}
 				Ok(sink)
@@ -194,11 +109,11 @@ impl<'s> ParserExt for ParseLine<'s>
 	}
 	fn consume_delimiter<F, R>(&mut self, d: char, cont: F) -> Result<R, ParseError> where F: FnOnce(&mut Self) -> Result<R, ParseError>
 	{
-		if self.front() != Some(d) { Err(ParseError::DelimiterRequired(self.current())) } else { cont(self.drop_opt(1)) }
+		if self.front() != Some(d) { Err(ParseError::Required(RequestType::Delimiter, self.current())) } else { cont(self.drop_opt(1)) }
 	}
 	fn consume_closing<F, R>(&mut self, c: char, cont: F) -> Result<R, ParseError> where F: FnOnce(&mut Self) -> Result<R, ParseError>
 	{
-		if self.front() != Some(c) { Err(ParseError::ClosingRequired(self.current())) } else { cont(self.drop_opt(1)) }
+		if self.front() != Some(c) { Err(ParseError::Required(RequestType::Closing, self.current())) } else { cont(self.drop_opt(1)) }
 	}
 	fn require_content<E>(self, err: E) -> Result<Self, ParseError> where E: FnOnce(Self) -> ParseError
 	{
@@ -256,7 +171,7 @@ impl FromSource for StringLiteral
 				Some('\\') => recursive_escape(input.drop_opt(1), sink),
 				Some('"') => { input.drop_opt(1); Ok(()) },
 				Some(c) => { sink.push(c); recursive_char(input.drop_one(), sink) },
-				None => Err(ParseError::ClosingRequired(input.current()))
+				None => Err(ParseError::Required(RequestType::Closing, input.current()))
 			}
 		}
 		fn recursive_escape<'s>(input: &mut ParseLine<'s>, sink: &mut String) -> Result<(), ParseError>
@@ -267,15 +182,15 @@ impl FromSource for StringLiteral
 				Some('n') => { sink.push('\n'); recursive_char(input.drop_opt(1), sink) },
 				Some('r') => { sink.push('\r'); recursive_char(input.drop_opt(1), sink) },
 				Some(c) => { sink.push(c); recursive_char(input.drop_opt(1), sink) },
-				None => Err(ParseError::ClosingRequired(input.current()))
+				None => Err(ParseError::Required(RequestType::Closing, input.current()))
 			}
 		}
 
 		if source.front() == Some('"')
 		{
-			let startloc = source.current();
+			let startloc = source.location();
 			let mut buf = String::new();
-			recursive_char(source.drop_opt(1), &mut buf).map(|_| LocationPacked(Location(source.line(), startloc), buf))
+			recursive_char(source.drop_opt(1), &mut buf).map(|_| LocationPacked(startloc, buf))
 		}
 		else { Err(ParseError::Expected(Self::object_name(), source.current())) }
 	}
@@ -376,7 +291,7 @@ impl FromSource for u32
 	fn object_name() -> Cow<'static, str> { "u32".into() }
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
-		let x = source.take_while(|c| c.is_digit(10)).require_content(|s| ParseError::IntValueRequired(s.current()))?;
+		let x = source.take_while(|c| c.is_digit(10)).require_content(|s| ParseError::Required(RequestType::IntValue, s.current()))?;
 		x.clone_as_string().parse::<u32>().map_err(|e| ParseError::NumericParseError(e, x.current()))
 	}
 }
@@ -385,7 +300,7 @@ impl FromSource for usize
 	fn object_name() -> Cow<'static, str> { "usize".into() }
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
-		let x = source.take_while(|c| c.is_digit(10)).require_content(|s| ParseError::IntValueRequired(s.current()))?;
+		let x = source.take_while(|c| c.is_digit(10)).require_content(|s| ParseError::Required(RequestType::IntValue, s.current()))?;
 		x.clone_as_string().parse::<usize>().map_err(|e| ParseError::NumericParseError(e, x.current()))
 	}
 }
@@ -432,7 +347,7 @@ impl FromSource for VariadicSize
 						Some(')') => { source.drop_opt(1); Ok(()) },
 						Some('0' ... '9') if do_continue => recurse(source, sink),
 						Some('$') if do_continue => recurse(source, sink),
-						_ => Err(ParseError::ClosingRequired(source.current()))
+						_ => Err(ParseError::Required(RequestType::Closing, source.current()))
 					}
 				})
 			}
@@ -458,8 +373,9 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 			target.insert_auto(name, value).into_parse_result().with_line(eline)
 		}
 		fn insert_vuniq_auto_or<T: Eq>(target: &mut NamedContents<T>, name: Option<Cow<str>>, value: T, eline: usize) -> Result<(), ParseErrorWithLine>
+			where T: Borrow<T> + ToOwned<Owned = T>
 		{
-			target.insert_auto_vunique(name, value).into_parse_result().with_line(eline)
+			target.insert_auto_vunique(name, Cow::Owned(value)).into_parse_result().with_line(eline)
 		}
 		match s.clone_as_string().as_ref()
 		{
@@ -494,7 +410,7 @@ pub fn parse_device_resources(sink: &mut ParsedDeviceResources, includes: &mut V
 			"TessellationEvaluationShader" | "TessEvaluationShader" => PipelineShaderStageInfo::parse_baseindent(source.drop_while(ignore_chars), lines, 0)
 				.map(|te| IndependentShaderStageInfo::from_pss(te, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT))
 				.and_then(|te| insert_uniq_auto_or(&mut sink.ind_shaders.tessevaluation, name, te, sline)),
-			_ => Err(ParseError::UnknownDeviceResource(s.current())).with_line(sline)
+			_ => Err(ParseError::UnknownEnumValue(EnumType::DeviceResource, s.current())).with_line(sline)
 		}?
 	}
 	Ok(())
@@ -526,7 +442,7 @@ impl FromSource for ExternalResourceData
 			&['I', 'm', 'a', 'g', 'e', 'V', 'i', 'e', 'w'] => source.drop_while(ignore_chars).parse::<ImageDimension>()
 				.and_then(|d| source.drop_while(ignore_chars).parse::<StringLiteral>().map(|n| ExternalResourceData::ImageView { dim: d, refname: n })),
 			&['S', 'w', 'a', 'p', 'C', 'h', 'a', 'i', 'n', 'V', 'i', 'e', 'w', 's'] => Ok(ExternalResourceData::SwapChainViews),
-			_ => Err(ParseError::UnknownExternalResource(s.current()))
+			_ => Err(ParseError::UnknownEnumValue(EnumType::ExternalResource, s.current()))
 		}
 	}
 }
@@ -544,7 +460,7 @@ impl FromSource for ComponentMapping
 				'g' | 'G' => Ok(ComponentSwizzle::G),
 				'b' | 'B' => Ok(ComponentSwizzle::B),
 				'a' | 'A' => Ok(ComponentSwizzle::A),
-				_ => Err(ParseError::UnknownComponentSwizzle(col))
+				_ => Err(ParseError::UnknownEnumValue(EnumType::ComponentSwizzle, col))
 			}
 		}
 
@@ -570,29 +486,25 @@ impl FromSourceBlock for ImageDescription
 		let extent = enterline.drop_while(ignore_chars).consume_closing('>', |s| s.drop_while(ignore_chars).parse::<VariadicSize>()).with_line(enterline.line())?;
 
 		let mut obj = ImageDescription { extent: extent.0, format, mapping: component_map, device_local: false, usage: 0 };
-		while let Some(mut s) = acquire_line(lines, 1)
+		do_while(|| acquire_line(lines, 1), |s| acquire_config_name(s).and_then(|name| match name.chars()
 		{
-			acquire_config_name(&mut s).and_then(|name| match name.chars()
+			&['U', 's', 'a', 'g', 'e'] =>
 			{
-				&['U', 's', 'a', 'g', 'e'] =>
+				fn recurse(source: &mut ParseLine, sink: &mut ImageDescription) -> Result<(), ParseError>
 				{
-					fn recurse(source: &mut ParseLine, sink: &mut ImageDescription) -> Result<(), ParseError>
-					{
-						if sampled_token(source) { sink.usage |= VK_IMAGE_USAGE_SAMPLED_BIT; Ok(()) }
-						else if color_attachment_token(source) { sink.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; Ok(()) }
-						else if input_attachment_token(source) { sink.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT; Ok(()) }
-						else if device_local_token(source) { sink.device_local = true; Ok(()) }
-						else { Err(ParseError::UnknownUsageBits("Image", source.current())) }?;
+					if sampled_token(source) { sink.usage |= VK_IMAGE_USAGE_SAMPLED_BIT; Ok(()) }
+					else if color_attachment_token(source) { sink.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT; Ok(()) }
+					else if input_attachment_token(source) { sink.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT; Ok(()) }
+					else if device_local_token(source) { sink.device_local = true; Ok(()) }
+					else { Err(ParseError::UnknownEnumValue(EnumType::ImageUsageBits, source.current())) }?;
 
-						if source.drop_while(ignore_chars).front() == Some('/') { recurse(source.drop_opt(1).drop_while(ignore_chars), sink) }
-						else { Ok(()) }
-					}
-					recurse(s.drop_while(ignore_chars), &mut obj)
-				},
-				_ => Err(ParseError::UnknownConfig("Image Description".into()))
-			}).with_line(s.line())?;
-		}
-		Ok(obj)
+					if source.drop_while(ignore_chars).front() == Some('/') { recurse(source.drop_opt(1).drop_while(ignore_chars), sink) }
+					else { Ok(()) }
+				}
+				recurse(s.drop_while(ignore_chars), &mut obj)
+			},
+			_ => Err(ParseError::UnknownConfig("Image Description".into()))
+		})).map(|_| obj)
 	}
 }
 impl FromSource for Filter
@@ -605,7 +517,7 @@ impl FromSource for Filter
 		{
 			&['N', 'e', 'a', 'r', 'e', 's', 't'] => Ok(Filter::Nearest),
 			&['L', 'i', 'n', 'e', 'a', 'r'] => Ok(Filter::Linear),
-			_ => Err(ParseError::UnknownFilterType(s.current()))
+			_ => Err(ParseError::UnknownEnumValue(EnumType::FilterType, s.current()))
 		}
 	}
 }
@@ -615,21 +527,16 @@ impl FromSourceBlock for SamplerDescription
 	{
 		let mut smp = SamplerDescription { mag_filter: Filter::Linear, min_filter: Filter::Linear };
 
-		while let Some(mut s) = acquire_line(lines, 1)
+		do_while(|| acquire_line(lines, 1), |s| acquire_config_name(s).and_then(|name| match name.chars()
 		{
-			acquire_config_name(&mut s).and_then(|name| match name.chars()
+			&['F', 'i', 'l', 't', 'e', 'r'] =>
 			{
-				&['F', 'i', 'l', 't', 'e', 'r'] =>
-				{
-					let magf = s.drop_while(ignore_chars).parse::<Filter>()?;
-					let minf = if s.drop_while(ignore_chars).is_empty() { magf } else { s.parse::<Filter>()? };
-					smp.mag_filter = magf; smp.min_filter = minf; Ok(())
-				},
-				_ => Err(ParseError::UnknownConfig("Sampler"))
-			}).with_line(s.line())?;
-		}
-
-		Ok(smp)
+				let magf = s.drop_while(ignore_chars).parse::<Filter>()?;
+				let minf = if s.drop_while(ignore_chars).is_empty() { magf } else { s.parse::<Filter>()? };
+				smp.mag_filter = magf; smp.min_filter = minf; Ok(())
+			},
+			_ => Err(ParseError::UnknownConfig("Sampler"))
+		})).map(|_| smp)
 	}
 }
 
@@ -642,33 +549,14 @@ impl FromSourceBlock for RenderPassData
 		{
 			acquire_config_name(&mut s).with_line(s.line()).and_then(|name| match name.chars()
 			{
-				&['A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't', 's'] => rpd.attachments.sink_check_overriding_online(s.line(), |sink|
-				{
-					while let Some(mut s) = acquire_line(source, 2)
-					{
-						let l = NamedConfigLine::parse(&mut s, RPAttachment::parse).with_line(s.line())?;
-						sink.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
-					}
-					Ok(())
-				}),
-				&['S', 'u', 'b', 'p', 'a', 's', 's', 'e', 's'] => rpd.subpasses.sink_check_overriding_online(s.line(), |sink|
-				{
-					while let Some(mut s) = acquire_line(source, 2)
-					{
-						let l = NamedConfigLine::parse(&mut s, RPSubpassDesc::parse).with_line(s.line())?;
-						sink.insert_auto(l.name.map(From::from), l.config).into_parse_result().with_line(s.line())?;
-					}
-					Ok(())
-				}),
-				&['D', 'e', 'p', 'e', 'n', 'd', 'e', 'n', 'c', 'i', 'e', 's'] => rpd.deps.sink_check_overriding_online(s.line(), |sink|
-				{
-					while let Some(mut s) = acquire_line(source, 2)
-					{
-						let dep = s.parse::<RPSubpassDeps>().with_line(s.line())?;
-						sink.push(dep);
-					}
-					Ok(())
-				}),
+				&['A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't', 's'] => rpd.attachments.sink_check_overriding_online(s.line(),
+					|sink| do_while(|| acquire_line(source, 2), |s| NamedConfigLine::parse(s, RPAttachment::parse)
+						.and_then(|l| sink.insert_auto(l.name.map(From::from), l.config).into_parse_result()))),
+				&['S', 'u', 'b', 'p', 'a', 's', 's', 'e', 's'] => rpd.subpasses.sink_check_overriding_online(s.line(),
+					|sink| do_while(|| acquire_line(source, 2), |s| NamedConfigLine::parse(s, RPSubpassDesc::parse)
+						.and_then(|l| sink.insert_auto(l.name.map(From::from), l.config).into_parse_result()))),
+				&['D', 'e', 'p', 'e', 'n', 'd', 'e', 'n', 'c', 'i', 'e', 's'] => rpd.deps.sink_check_overriding_online(s.line(),
+					|sink| do_while(|| acquire_line(source, 2), |s| s.parse::<RPSubpassDeps>().map(|d| { sink.push(d); }))),
 				_ => Err(ParseError::UnknownConfig("RenderPass")).with_line(s.line())
 			})?
 		}
@@ -696,7 +584,7 @@ impl FromSource for RPAttachment
 					if clear_on_load_token(source) { rpa.clear_on_load = Some(true); Ok(()) }
 					else if load_content_token(source) { rpa.clear_on_load = Some(false); Ok(()) }
 					else if preserve_content_token(source) { rpa.preserve_content = true; Ok(()) }
-					else { Err(ParseError::UnknownRenderPassAttachmentOptions(source.current())) }?;
+					else { Err(ParseError::UnknownEnumValue(EnumType::RenderPassAttachmentOptions, source.current())) }?;
 
 					if source.drop_while(ignore_chars).front() == Some('/') { recurse(rpa, source.drop_opt(1).drop_while(ignore_chars)) }
 					else { Ok(()) }
@@ -753,7 +641,7 @@ fn parse_rp_clear_mode(source: &ParseLine) -> Result<Option<bool>, ParseError>
 		&['N', 'o', 'n', 'e'] => Ok(None),
 		&['O', 'n', 'L', 'o', 'a', 'd'] => Ok(Some(true)),
 		&['P', 'r', 'e', 's', 'e', 'r', 'v', 'e'] => Ok(Some(false)),
-		_ => Err(ParseError::UnknownClearMode(source.current()))
+		_ => Err(ParseError::UnknownEnumValue(EnumType::ClearMode, source.current()))
 	}
 }
 
@@ -762,15 +650,12 @@ impl FromSourceBlock for SimpleRenderPassData
 	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<SimpleRenderPassData, ParseErrorWithLine>
 	{
 		let (mut fmt, mut clear_mode) = (None, None);
-		while let Some(mut s) = acquire_line(source, 1)
+		do_while(|| acquire_line(source, 1), |s| acquire_config_name(s).and_then(|name| match name.chars()
 		{
-			acquire_config_name(&mut s).and_then(|name| match name.chars()
-			{
-				&['F', 'o', 'r', 'm', 'a', 't'] => fmt.assign_check_overriding(|| s.drop_while(ignore_chars).parse_loc::<Format>()),
-				&['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }),
-				_ => Err(ParseError::UnknownConfig("SimpleRenderPass"))
-			}).with_line(s.line())?;
-		}
+			&['F', 'o', 'r', 'm', 'a', 't'] => fmt.assign_check_overriding(|| s.drop_while(ignore_chars).parse_loc::<Format>()),
+			&['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }),
+			_ => Err(ParseError::UnknownConfig("SimpleRenderPass"))
+		}))?;
 		fmt.ok_or(ParseError::ConfigRequired("Format")).with_line(enterline.line())
 			.map(|fmt| SimpleRenderPassData { format: fmt, clear_on_load: clear_mode })
 	}
@@ -780,15 +665,12 @@ impl FromSourceBlock for PresentedRenderPassData
 	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let (mut fmt, mut clear_mode) = (None, None);
-		while let Some(mut s) = acquire_line(source, 1)
+		do_while(|| acquire_line(source, 1), |s| acquire_config_name(s).and_then(|name| match name.chars()
 		{
-			acquire_config_name(&mut s).and_then(|name| match name.chars()
-			{
-				&['F', 'o', 'r', 'm', 'a', 't'] => fmt.assign_check_overriding(|| s.drop_while(ignore_chars).parse_loc::<Format>()),
-				&['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }),
-				_ => Err(ParseError::UnknownConfig("PresentedRenderPass"))
-			}).with_line(s.line())?;
-		}
+			&['F', 'o', 'r', 'm', 'a', 't'] => fmt.assign_check_overriding(|| s.drop_while(ignore_chars).parse_loc::<Format>()),
+			&['C', 'l', 'e', 'a', 'r', 'M', 'o', 'd', 'e'] => parse_rp_clear_mode(s.drop_while(ignore_chars)).map(|cm| { clear_mode = cm; }),
+			_ => Err(ParseError::UnknownConfig("PresentedRenderPass"))
+		}))?;
 		fmt.ok_or(ParseError::ConfigRequired("Format")).with_line(enterline.line())
 			.map(|fmt| PresentedRenderPassData { format: fmt, clear_on_load: clear_mode })
 	}
@@ -847,55 +729,30 @@ impl FromSourceBlock for DescriptorSetLayoutData
 	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let mut entries = Vec::new();
-		while let Some(mut s) = acquire_line(source, 1)
-		{
-			entries.push(s.parse::<DescriptorEntry>().with_line(s.line())?);
-		}
-		Ok(DescriptorSetLayoutData { entries: entries })
+		do_while(|| acquire_line(source, 1), |mut s| s.parse::<interlude::Descriptor>().map(|x| { entries.push(x); }))
+			.map(|_| DescriptorSetLayoutData { entries })
 	}
 }
-impl FromSource for DescriptorEntryKind
+impl FromSource for interlude::Descriptor
 {
-	fn object_name() -> Cow<'static, str> { "Descriptor Entry Kind".into() }
+	fn object_name() -> Cow<'static, str> { "Descriptor Entry".into() }
 	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
 	{
-		let kstr = source.take_until(ident_break);
-		match kstr.clone_as_string().as_ref()
+		let count = if let Some('0' ... '9') = source.front() { source.parse::<usize>() } else { Ok(1) }? as u32;
+		let type_str = source.drop_while(ignore_chars).take_until(ident_break);
+		let visibility = source.drop_while(ignore_chars).consume_delimiter(':', |source| source.drop_while(ignore_chars).parse::<ShaderStage>())?;
+		match type_str.chars()
 		{
-			"Sampler" => Ok(DescriptorEntryKind::Sampler),
-			"CombinedSampler" => Ok(DescriptorEntryKind::CombinedSampler),
-			"SampledImage" => Ok(DescriptorEntryKind::SampledImage),
-			"StorageImage" => Ok(DescriptorEntryKind::StorageImage),
-			"UniformTexelBuffer" => Ok(DescriptorEntryKind::UniformBuffer(BufferDescriptorOption::TexelStore)),
-			"StorageTexelBuffer" => Ok(DescriptorEntryKind::StorageBuffer(BufferDescriptorOption::TexelStore)),
-			"UniformBuffer" => Ok(DescriptorEntryKind::UniformBuffer(BufferDescriptorOption::None)),
-			"StorageBuffer" => Ok(DescriptorEntryKind::StorageBuffer(BufferDescriptorOption::None)),
-			"UniformBufferDynamic" => Ok(DescriptorEntryKind::UniformBuffer(BufferDescriptorOption::DynamicOffset)),
-			"StorageBufferDynamic" => Ok(DescriptorEntryKind::StorageBuffer(BufferDescriptorOption::DynamicOffset)),
-			"InputAttachment" => Ok(DescriptorEntryKind::InputAttachment),
-			_ => Err(ParseError::UnknownDescriptorKind(kstr.current()))
+			&['U', 'n', 'i', 'f', 'o', 'r', 'm'] | &['U', 'n', 'i', 'f', 'o', 'r', 'm', 'B', 'u', 'f', 'f', 'e', 'r'] =>
+				Ok(interlude::Descriptor::Uniform(count, visibility)),
+			&['S', 't', 'o', 'r', 'a', 'g', 'e'] | &['S', 't', 'o', 'r', 'a', 'g', 'e', 'B', 'u', 'f', 'f', 'e', 'r'] =>
+				Ok(interlude::Descriptor::Storage(count, visibility)),
+			&['C', 'o', 'm', 'b', 'i', 'n', 'e', 'd', 'S', 'a', 'm', 'p', 'l', 'e', 'r'] =>
+				Ok(interlude::Descriptor::CombinedSampler(count, visibility)),
+			&['I', 'n', 'p', 'u', 't', 'A', 't', 't', 'a', 'c', 'h', 'm', 'e', 'n', 't'] =>
+				Ok(interlude::Descriptor::InputAttachment(count, visibility)),
+			_ => Err(ParseError::UnknownEnumValue(EnumType::DescriptorKind, type_str.current()))
 		}
-	}
-}
-impl FromSource for DescriptorEntry
-{
-	fn object_name() -> Cow<'static, str> { "DescriptorSet Entry".into() }
-	fn parse(source: &mut ParseLine) -> Result<Self, ParseError>
-	{
-		let count = match source.front()
-		{
-			/// count type : visibility
-			Some('0' ... '9') =>
-			{
-				let count_str = source.take_while(|c| '0' <= c && c <= '9'); assert!(!count_str.is_empty());
-				count_str.clone_as_string().parse::<usize>().map_err(|e| ParseError::NumericParseError(e, count_str.current()))
-			},
-			_ => Ok(1)
-		}?;
-
-		let typename = source.drop_while(ignore_chars).parse::<DescriptorEntryKind>()?;
-		let visibility = source.drop_while(ignore_chars).consume_delimiter(':', |source| source.drop_while(ignore_chars).parse::<ShaderStageFlags>())?;
-		Ok(DescriptorEntry { count: count, kind: typename, visibility: visibility })
 	}
 }
 impl FromSourceBlock for PushConstantLayout
@@ -903,15 +760,12 @@ impl FromSourceBlock for PushConstantLayout
 	fn parse(enterline: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let (mut range, mut vis) = (None, None);
-		while let Some(mut s) = acquire_line(source, 1)
+		do_while(|| acquire_line(source, 1), |s| acquire_config_name(s).and_then(|name| match name.chars()
 		{
-			acquire_config_name(&mut s).and_then(|name| match name.chars()
-			{
-				&['R', 'a', 'n', 'g', 'e'] => range.assign_check_overriding(|| s.drop_while(ignore_chars).ranged::<usize>()),
-				&['V', 'i', 's', 'i', 'b', 'i', 'l', 'i', 't', 'y'] => vis.assign_check_overriding(|| s.drop_while(ignore_chars).parse::<ShaderStageFlags>()),
-				_ => Err(ParseError::UnknownConfig("PushConstantLayout"))
-			}).with_line(s.line())?;
-		}
+			&['R', 'a', 'n', 'g', 'e'] => range.assign_check_overriding(|| s.drop_while(ignore_chars).ranged::<usize>()),
+			&['V', 'i', 's', 'i', 'b', 'i', 'l', 'i', 't', 'y'] => vis.assign_check_overriding(|| s.drop_while(ignore_chars).parse::<interlude::ShaderStage>()),
+			_ => Err(ParseError::UnknownConfig("PushConstantLayout"))
+		}))?;
 		let range = range.ok_or(ParseError::ConfigRequired("Range")).with_line(enterline.line())?;
 		let visibility = vis.ok_or(ParseError::ConfigRequired("Visibility")).with_line(enterline.line())?;
 		Ok(PushConstantLayout { range: range, visibility: visibility })
@@ -921,20 +775,15 @@ impl FromSourceBlock for PipelineLayout
 {
 	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
-		let (mut desc, mut pcls) = (Vec::new(), Vec::new());
-		while let Some(mut s) = acquire_line(source, 1)
+		let (mut descs, mut pcls) = (Vec::new(), Vec::new());
+		do_while(|| acquire_line(source, 1), |s| acquire_config_name(s).and_then(|name| match name.chars()
 		{
-			/// - | "Descriptors" ints... / "PushConstantLayouts" ints...
-			acquire_config_name(&mut s).and_then(|name| match name.chars()
-			{
-				&['D', 'e', 's', 'c', 'r', 'i', 'p', 't', 'o', 'r', 's'] =>
-					desc.assign_check_overriding(|| s.drop_while(ignore_chars).array_loc::<ConfigInt>()),
-				&['P', 'u', 's', 'h', 'C', 'o', 'n', 's', 't', 'a', 'n', 't', 'L', 'a', 'y', 'o', 'u', 't', 's'] =>
-					pcls.assign_check_overriding(|| s.drop_while(ignore_chars).array_loc::<ConfigInt>()),
-				_ => Err(ParseError::UnknownConfig("PipelineLayout"))
-			}).with_line(s.line())?;
-		}
-		Ok(PipelineLayout { descs: desc, pushconstants: pcls })
+			&['D', 'e', 's', 'c', 'r', 'i', 'p', 't', 'o', 'r', 's'] =>
+				descs.assign_check_overriding(|| s.drop_while(ignore_chars).array_loc::<ConfigInt>()),
+			&['P', 'u', 's', 'h', 'C', 'o', 'n', 's', 't', 'a', 'n', 't', 'L', 'a', 'y', 'o', 'u', 't', 's'] =>
+				pcls.assign_check_overriding(|| s.drop_while(ignore_chars).array_loc::<ConfigInt>()),
+			_ => Err(ParseError::UnknownConfig("PipelineLayout"))
+		})).map(|_| PipelineLayout { descs, pushconstants: pcls })
 	}
 }
 impl FromSourceBlock for DescriptorSetsInfo
@@ -942,14 +791,8 @@ impl FromSourceBlock for DescriptorSetsInfo
 	fn parse(_: &mut ParseLine, source: &mut LazyLines) -> Result<Self, ParseErrorWithLine>
 	{
 		let mut entries = Vec::new();
-		while let Some(mut s) = acquire_line(source, 1)
-		{
-			/// - [$Name :] $Name
-			let l = NamedConfigLine::parse(&mut s, ConfigInt::parse_with_location)
-				.map(|l| DescriptorSetEntry { name: l.name, layout: l.config }).with_line(s.line())?;
-			entries.push(l);
-		}
-		Ok(DescriptorSetsInfo(entries))
+		do_while(|| acquire_line(source, 1), |s| NamedConfigLine::parse(s, ConfigInt::parse_with_location)
+			.map(|l| { entries.push(DescriptorSetEntry { name: l.name, layout: l.config }); })).map(|_| DescriptorSetsInfo(entries))
 	}
 }
 impl FromSourceBlock for PipelineStateInfo
@@ -1046,33 +889,28 @@ impl VertexShaderStageInfo
 		let asset = enterline.parse_loc::<AssetResource>().with_line(enterline.line())?;
 
 		let (mut consts, mut bindings, mut inputs) = (BTreeMap::new(), Vec::new(), BTreeMap::new());
-		while let Some(mut s) = acquire_line(source, baseindent + 1)
+		do_while(|| acquire_line(source, baseindent + 1), |s| if constant_token(s)
 		{
-			if constant_token(&mut s)
-			{
-				// - "Constant" usize ":" value
-				let index = s.drop_while(ignore_chars).parse::<usize>().with_line(s.line())?;
-				s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
-					.map(|v| { consts.insert(index, v); })
-			}
-			else if stream_bindings_token(&mut s)
-			{
-				// - "StreamBindings" ":" (StreamBindingDesc...)
-				bindings.assign_check_overriding(|| s.drop_while(ignore_chars).consume_delimiter(':', |s| s.drop_while(ignore_chars).array::<StreamBindingDesc>()))
-			}
-			else if input_token(&mut s)
-			{
-				// - "Input" usize "." usize To usize ":" Format
-				let binding = s.drop_while(ignore_chars).parse::<usize>().with_line(s.line())?;
-				let offset = s.drop_while(ignore_chars).consume_char('.', || "\".\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>()).with_line(s.line())?;
-				let index = s.drop_while(ignore_chars).consume(to_token, || "\"To\" or \"->\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>())
-					.with_line(s.line())?;
-				s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| s.drop_while(ignore_chars).parse::<Format>())
-					.map(|format| { inputs.insert(index, VertexInputInfo { binding, offset, format }); })
-			}
-			else { Err(ParseError::UnknownConfig("Vertex Shader Module")) }.with_line(s.line())?;
+			// - "Constant" usize ":" value
+			let index = s.drop_while(ignore_chars).parse::<usize>()?;
+			s.drop_while(ignore_chars).consume_delimiter(':', |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
+				.map(|v| { consts.insert(index, v); })
 		}
-		Ok(VertexShaderStageInfo { asset: asset, consts: consts, stream_bindings: bindings, inputs: inputs })
+		else if stream_bindings_token(s)
+		{
+			// - "StreamBindings" ":" StreamBindingDesc...
+			bindings.assign_check_overriding(|| s.drop_while(ignore_chars).consume_delimiter(':', |s| s.drop_while(ignore_chars).array::<StreamBindingDesc>()))	
+		}
+		else if input_token(s)
+		{
+			// - "Input" usize "." usize To usize ":" Format
+			let binding = s.drop_while(ignore_chars).parse::<usize>()?;
+			let offset = s.drop_while(ignore_chars).consume_char('.', || "\".\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>())?;
+			let index = s.drop_while(ignore_chars).consume(to_token, || "\"To\" or \"->\"".into(), |s| s.drop_while(ignore_chars).parse::<usize>())?;
+			s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| s.drop_while(ignore_chars).parse::<Format>())
+				.map(|format| { inputs.insert(index, VertexInputInfo { binding, offset, format }); })
+		}
+		else { Err(ParseError::UnknownConfig("Vertex Shader Module")) }).map(|_| VertexShaderStageInfo { asset, consts, inputs, stream_bindings: bindings })
 	}
 }
 impl PipelineShaderStageInfo
@@ -1082,18 +920,14 @@ impl PipelineShaderStageInfo
 		let asset = enterline.parse_loc::<AssetResource>().with_line(enterline.line())?;
 
 		let mut consts = BTreeMap::new();
-		while let Some(mut s) = acquire_line(source, baseindent + 1)
+		do_while(|| acquire_line(source, baseindent + 1), |s| if constant_token(s)
 		{
-			/// - "Constant" usize : value
-			if constant_token(&mut s)
-			{
-				let index = s.drop_while(ignore_chars).parse::<usize>().with_line(s.line())?;
-				s.drop_while(ignore_chars).consume_char(':', || "\":\"".into(), |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
-					.map(|v| { consts.insert(index, v); })
-			}
-			else { Err(ParseError::UnknownConfig("Shader Module")) }.with_line(s.line())?;
+			/// - "Constant" usize ":" value
+			let index = s.drop_while(ignore_chars).parse::<usize>()?;
+			s.drop_while(ignore_chars).consume_delimiter(':', |s| NumericLiteral::parse(s.drop_while(ignore_chars), true))
+				.map(|v| { consts.insert(index, v); })
 		}
-		Ok(PipelineShaderStageInfo { asset: asset, consts: consts })
+		else { Err(ParseError::UnknownConfig("Shader Module")) }).map(|_| PipelineShaderStageInfo { asset, consts })
 	}
 }
 impl FromSource for VkPrimitiveTopology
@@ -1112,7 +946,7 @@ impl FromSource for VkPrimitiveTopology
 				"LineStrip" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
 				"TriangleList" => Ok(VkPrimitiveTopology::TriangleListWithAdjacency),
 				"TriangleStrip" => Ok(VkPrimitiveTopology::TriangleStripWithAdjacency),
-				_ => Err(ParseError::UnknownPrimitiveTopology(true, prim.current()))
+				_ => Err(ParseError::UnknownEnumValue(EnumType::PrimitiveTopology(true), prim.current()))
 			})
 		}
 		else
@@ -1126,7 +960,7 @@ impl FromSource for VkPrimitiveTopology
 				"TriangleStrip" => Ok(VkPrimitiveTopology::TriangleStrip),
 				"TriangleFan" => Ok(VkPrimitiveTopology::TriangleFan),
 				"PatchList" => Ok(VkPrimitiveTopology::PatchList),
-				_ => Err(ParseError::UnknownPrimitiveTopology(false, prim.current()))
+				_ => Err(ParseError::UnknownEnumValue(EnumType::PrimitiveTopology(false), prim.current()))
 			}
 		}
 	}
@@ -1137,11 +971,7 @@ fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> R
 	if current.front() == None
 	{
 		// Descending
-		while let Some(mut s) = acquire_line(source, 2)
-		{
-			v.push(ViewportScissorEntry::parse(&mut s).with_line(s.line())?);
-		}
-		Ok(v)
+		do_while(|| acquire_line(source, 2), |s| s.parse::<ViewportScissorEntry>().map(|x| { v.push(x); })).map(|_| v)
 	}
 	else if current.front() == Some('[')
 	{
@@ -1160,7 +990,7 @@ fn parse_viewport_scissors(current: &mut ParseLine, source: &mut LazyLines) -> R
 		}
 		match recursive(current.drop_opt(1).drop_while(ignore_chars), &mut v)
 		{
-			Ok(()) => if current.front() == Some(']') { Ok(v) } else { Err(ParseError::ClosingRequired(current.current())) },
+			Ok(()) => if current.front() == Some(']') { Ok(v) } else { Err(ParseError::Required(RequestType::Closing, current.current())) },
 			Err(e) => Err(e)
 		}.with_line(current.line())
 	}
@@ -1285,7 +1115,7 @@ impl<C> NamedConfigLine<C>
 	{
 		if input.front() == Some('$')
 		{
-			let name = input.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::NameRequired(s.current()))?;
+			let name = input.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::Required(RequestType::Name, s.current()))?;
 			input.drop_while(ignore_chars).consume_delimiter(':', |s| argparser(s.drop_while(ignore_chars)))
 				.map(|c| NamedConfigLine { name: Some(name.clone_as_string()), config: c })
 		}
@@ -1298,7 +1128,7 @@ impl NamedConfigLine<()>
 	{
 		if input.front() == Some('$')
 		{
-			let name = input.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::NameRequired(s.current()))?;
+			let name = input.drop_opt(1).take_until(ident_break).require_content(|s| ParseError::Required(RequestType::Name, s.current()))?;
 			input.drop_while(ignore_chars).consume_delimiter(':', |_| Ok(NamedConfigLine { name: Some(name.clone_as_string()), config: () }))
 		}
 		else { Ok(NamedConfigLine { name: None, config: () }) }
@@ -1308,13 +1138,22 @@ impl NamedConfigLine<()>
 pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'s>, ParseError>
 {
 	let name = source.take_until(ident_break);
-	if source.drop_while(ignore_chars).front() != Some(':') { Err(ParseError::DelimiterRequired(source.current())) }
+	if source.drop_while(ignore_chars).front() != Some(':') { Err(ParseError::Required(RequestType::Delimiter, source.current())) }
 	else { source.drop_opt(1); Ok(name) }
+}
+/// while let Some(mut s) = acquirer() { processor(s).with_line(s.line())? }
+fn do_while<'s, AF, PF>(mut acquirer: AF, mut processor: PF) -> Result<(), ParseErrorWithLine>
+	where AF: FnMut() -> Option<ParseLine<'s>>, PF: FnMut(&mut ParseLine<'s>) -> Result<(), ParseError>
+{
+	if let Some(mut s) = acquirer() { processor(&mut s).with_line(s.line()).and_then(|_| do_while(acquirer, processor)) }
+	else { Ok(()) }
 }
 
 #[cfg(test)] mod tests
 {
+	use parsetools::*;
 	use super::*;
+	use interlude;
 	use itertools::Itertools;
 
 	#[test] fn parse_precise_renderpass_ref()
@@ -1323,11 +1162,11 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		{
 			PreciseRenderPassRef::parse; "0.1" => Ok(PreciseRenderPassRef
 			{
-				rp: LocationPacked(Location(1, 0), ConfigInt::Value(0)), subpass: LocationPacked(Location(1, 2), ConfigInt::Value(1))
+				rp: LocationPacked(Location(1, 1), ConfigInt::Value(0)), subpass: LocationPacked(Location(1, 3), ConfigInt::Value(1))
 			}),
 			PreciseRenderPassRef::parse; "$First .1" => Ok(PreciseRenderPassRef
 			{
-				rp: LocationPacked(Location(1, 0), ConfigInt::Ref("First".into())), subpass: LocationPacked(Location(1, 8), ConfigInt::Value(1))
+				rp: LocationPacked(Location(1, 1), ConfigInt::Ref("First".into())), subpass: LocationPacked(Location(1, 9), ConfigInt::Value(1))
 			}),
 			PreciseRenderPassRef::parse; "$Final" => Err(ParseError::Expected("PreciseRenderPassRef".into(), 0))
 		}
@@ -1350,28 +1189,23 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		{
 			Size3F::parse; "(0.0, 0.0, 1.0)" => Ok(Size3F(0.0f32, 0.0, 1.0)),
 			Size3F::parse; "0.0" => Err(ParseError::Expected("Size3F".into(), 0)),
-			Size3F::parse; "(0.0 " => Err(ParseError::DelimiterRequired(5)),
-			Size3F::parse; "(0, 0.0, 0.0" => Err(ParseError::ClosingRequired(12)),
+			Size3F::parse; "(0.0 " => Err(ParseError::Required(RequestType::Delimiter, 5)),
+			Size3F::parse; "(0, 0.0, 0.0" => Err(ParseError::Required(RequestType::Closing, 12)),
 			Offset2::parse; "(0, 0)" => Ok(Offset2(0, 0)),
 			Offset2::parse; "0" => Err(ParseError::Expected("Offset2".into(), 0)),
-			Offset2::parse; "(0 " => Err(ParseError::DelimiterRequired(3)),
-			Offset2::parse; "(0, 0, 0" => Err(ParseError::ClosingRequired(5)),
-			Offset2::parse; "(0, 0 " => Err(ParseError::ClosingRequired(6))
+			Offset2::parse; "(0 " => Err(ParseError::Required(RequestType::Delimiter, 3)),
+			Offset2::parse; "(0, 0, 0" => Err(ParseError::Required(RequestType::Closing, 5)),
+			Offset2::parse; "(0, 0 " => Err(ParseError::Required(RequestType::Closing, 6))
 		}
 	}
 	#[test] fn descriptor_entry()
 	{
+		use interlude::*;
 		Testing!
 		{
-			DescriptorEntry::parse; "UniformBuffer: Vertex" => Ok(DescriptorEntry
-			{
-				kind: DescriptorEntryKind::UniformBuffer(BufferDescriptorOption::None), count: 1, visibility: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT)
-			}),
-			DescriptorEntry::parse; "2 CombinedSampler : Geometry / Fragment" => Ok(DescriptorEntry
-			{
-				kind: DescriptorEntryKind::CombinedSampler, count: 2, visibility: ShaderStageFlags(VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
-			}),
-			DescriptorEntry::parse; "a: Vertex" => Err(ParseError::UnknownDescriptorKind(0))
+			Descriptor::parse; "UniformBuffer: Vertex" => Ok(Descriptor::Uniform(1, ShaderStage::Vertex)),
+			Descriptor::parse; "2 CombinedSampler : Geometry / Fragment" => Ok(Descriptor::CombinedSampler(2, ShaderStage::Geometry | ShaderStage::Fragment)),
+			Descriptor::parse; "a: Vertex" => Err(ParseError::UnknownEnumValue(EnumType::DescriptorKind, 0))
 		}
 	}
 	#[test] fn primitive_topology()
@@ -1380,8 +1214,8 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		{
 			VkPrimitiveTopology::parse; "PointList" => Ok(VkPrimitiveTopology::PointList),
 			VkPrimitiveTopology::parse; "LineStrip with Adjacency" => Ok(VkPrimitiveTopology::LineStripWithAdjacency),
-			VkPrimitiveTopology::parse; "PatchList with Adjacency" => Err(ParseError::UnknownPrimitiveTopology(true, 0)),
-			VkPrimitiveTopology::parse; "PointStrip" => Err(ParseError::UnknownPrimitiveTopology(false, 0)),
+			VkPrimitiveTopology::parse; "PatchList with Adjacency" => Err(ParseError::UnknownEnumValue(EnumType::PrimitiveTopology(true), 0)),
+			VkPrimitiveTopology::parse; "PointStrip" => Err(ParseError::UnknownEnumValue(EnumType::PrimitiveTopology(false), 0)),
 			VkPrimitiveTopology::parse; "" => Err(ParseError::Expected("Primitive Topology".into(), 0))
 		}
 	}
@@ -1391,36 +1225,36 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		{
 			RPSubpassDeps::parse; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage, ByRegion" => Ok(RPSubpassDeps
 			{
-				passtrans: Transition { from: LocationPacked(Location(1, 0), ConfigInt::Value(0)), to: LocationPacked(Location(1, 5), ConfigInt::Value(1)) },
+				passtrans: Transition { from: LocationPacked(Location(1, 1), ConfigInt::Value(0)), to: LocationPacked(Location(1, 6), ConfigInt::Value(1)) },
 				access_mask: Transition
 				{
-					from: LocationPacked(Location(1, 8), AccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)),
-					to: LocationPacked(Location(1, 32), AccessFlags(VK_ACCESS_SHADER_READ_BIT))
+					from: LocationPacked(Location(1, 9), interlude::AccessFlags::ColorAttachmentWrite),
+					to: LocationPacked(Location(1, 33), interlude::AccessFlags::ShaderRead)
 				},
-				stage_bits: LocationPacked(Location(1, 45), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: true
+				stage_bits: LocationPacked(Location(1, 46), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: true
 			}),
 			RPSubpassDeps::parse; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage" => Ok(RPSubpassDeps
 			{
-				passtrans: Transition { from: LocationPacked(Location(1, 0), ConfigInt::Value(0)), to: LocationPacked(Location(1, 5), ConfigInt::Value(1)) },
+				passtrans: Transition { from: LocationPacked(Location(1, 1), ConfigInt::Value(0)), to: LocationPacked(Location(1, 6), ConfigInt::Value(1)) },
 				access_mask: Transition
 				{
-					from: LocationPacked(Location(1, 8), AccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)),
-					to: LocationPacked(Location(1, 32), AccessFlags(VK_ACCESS_SHADER_READ_BIT))
+					from: LocationPacked(Location(1, 9), interlude::AccessFlags::ColorAttachmentWrite),
+					to: LocationPacked(Location(1, 33), interlude::AccessFlags::ShaderRead)
 				},
-				stage_bits: LocationPacked(Location(1, 45), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: false
+				stage_bits: LocationPacked(Location(1, 46), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: false
 			}),
 			RPSubpassDeps::parse; "0 -> 1: ColorAttachmentWrite -> ShaderRead @ FragmentShaderStage," => Ok(RPSubpassDeps
 			{
-				passtrans: Transition { from: LocationPacked(Location(1, 0), ConfigInt::Value(0)), to: LocationPacked(Location(1, 5), ConfigInt::Value(1)) },
+				passtrans: Transition { from: LocationPacked(Location(1, 1), ConfigInt::Value(0)), to: LocationPacked(Location(1, 6), ConfigInt::Value(1)) },
 				access_mask: Transition
 				{
-					from: LocationPacked(Location(1, 8), AccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)),
-					to: LocationPacked(Location(1, 32), AccessFlags(VK_ACCESS_SHADER_READ_BIT))
+					from: LocationPacked(Location(1, 9), interlude::AccessFlags::ColorAttachmentWrite),
+					to: LocationPacked(Location(1, 33), interlude::AccessFlags::ShaderRead)
 				},
-				stage_bits: LocationPacked(Location(1, 45), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: false
+				stage_bits: LocationPacked(Location(1, 46), VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT), by_region: false
 			}),
-			RPSubpassDeps::parse; "0 -> 1: ColorAttachmentWrite -> ShaderRead" => Err(ParseError::DelimiterRequired(42)),
-			RPSubpassDeps::parse; "0 -> 1" => Err(ParseError::DelimiterRequired(6))
+			RPSubpassDeps::parse; "0 -> 1: ColorAttachmentWrite -> ShaderRead" => Err(ParseError::Expected("\"At\" or \"@\"".into(), 42)),
+			RPSubpassDeps::parse; "0 -> 1" => Err(ParseError::Required(RequestType::Delimiter, 6))
 		}
 	}
 	#[test] fn test_from_token()
@@ -1451,26 +1285,26 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		{
 			RPAttachment::parse; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal <- ColorAttachmentOptimal, PreserveContent" => Ok(RPAttachment
 			{
-				format: LocationPacked(Location(1, 0), Format::Value(VkFormat::R8G8B8A8_UNORM)), preserve_content: true, clear_on_load: None,
+				format: LocationPacked(Location(1, 1), Format::Value(VkFormat::R8G8B8A8_UNORM)), preserve_content: true, clear_on_load: None,
 				layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 			}),
 			RPAttachment::parse; "R32 SFLOAT, ShaderReadOnlyOptimal <- ColorAttachmentOptimal" => Ok(RPAttachment
 			{
-				format: LocationPacked(Location(1, 0), Format::Value(VkFormat::R32_SFLOAT)), preserve_content: false, clear_on_load: None,
+				format: LocationPacked(Location(1, 1), Format::Value(VkFormat::R32_SFLOAT)), preserve_content: false, clear_on_load: None,
 				layouts: Transition { from: VkImageLayout::ColorAttachmentOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 			}),
 			RPAttachment::parse; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, ClearOnLoad" => Ok(RPAttachment
 			{
-				format: LocationPacked(Location(1, 0), Format::Value(VkFormat::R8G8B8A8_UNORM)), preserve_content: false, clear_on_load: Some(true),
+				format: LocationPacked(Location(1, 1), Format::Value(VkFormat::R8G8B8A8_UNORM)), preserve_content: false, clear_on_load: Some(true),
 				layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }
 			}),
 			RPAttachment::parse; "R8G8B8A8 SNORM, ShaderReadOnlyOptimal, LoadContent / PreserveContent" => Ok(RPAttachment
 			{
-				format: LocationPacked(Location(1, 0), Format::Value(VkFormat::R8G8B8A8_SNORM)), preserve_content: true, clear_on_load: Some(false),
+				format: LocationPacked(Location(1, 1), Format::Value(VkFormat::R8G8B8A8_SNORM)), preserve_content: true, clear_on_load: Some(false),
 				layouts: Transition { from: VkImageLayout::ShaderReadOnlyOptimal, to: VkImageLayout::ShaderReadOnlyOptimal }	
 			}),
-			RPAttachment::parse; "R8G8B8A8 UNORM" => Err(ParseError::DelimiterRequired(14)),
-			RPAttachment::parse; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, Hoge" => Err(ParseError::UnknownRenderPassAttachmentOptions(39))
+			RPAttachment::parse; "R8G8B8A8 UNORM" => Err(ParseError::Required(RequestType::Delimiter, 14)),
+			RPAttachment::parse; "R8G8B8A8 UNORM, ShaderReadOnlyOptimal, Hoge" => Err(ParseError::UnknownEnumValue(EnumType::RenderPassAttachmentOptions, 39))
 		}
 	}
 	#[test] fn test_subpass_desc()
@@ -1478,15 +1312,15 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		Testing!
 		{
 			RPSubpassDesc::parse; "RenderTo 0"
-				=> Ok(RPSubpassDesc { color_outs: vec![LocationPacked(Location(1, 9), ConfigInt::Value(0))], inputs: Vec::new() }),
+				=> Ok(RPSubpassDesc { color_outs: vec![LocationPacked(Location(1, 10), ConfigInt::Value(0))], inputs: Vec::new() }),
 			RPSubpassDesc::parse; "RenderTo 0 From 1" => Ok(RPSubpassDesc
 			{
-				color_outs: vec![LocationPacked(Location(1, 9), ConfigInt::Value(0))], inputs: vec![LocationPacked(Location(1, 16), ConfigInt::Value(1))]
+				color_outs: vec![LocationPacked(Location(1, 10), ConfigInt::Value(0))], inputs: vec![LocationPacked(Location(1, 17), ConfigInt::Value(1))]
 			}),
 			RPSubpassDesc::parse; "<- [1, 2] RenderTo [0, 3]" => Ok(RPSubpassDesc
 			{
-				color_outs: vec![LocationPacked(Location(1, 20), ConfigInt::Value(0)), LocationPacked(Location(1, 23), ConfigInt::Value(3))],
-				inputs: vec![LocationPacked(Location(1, 4), ConfigInt::Value(1)), LocationPacked(Location(1, 7), ConfigInt::Value(2))]
+				color_outs: vec![LocationPacked(Location(1, 21), ConfigInt::Value(0)), LocationPacked(Location(1, 24), ConfigInt::Value(3))],
+				inputs: vec![LocationPacked(Location(1, 5), ConfigInt::Value(1)), LocationPacked(Location(1, 8), ConfigInt::Value(2))]
 			}),
 			RPSubpassDesc::parse; "Preserve 0" => Err(ParseError::CorruptedSubpassDesc(0)),
 			RPSubpassDesc::parse; "RenderTo 0 RenderTo 1" => Err(ParseError::DefinitionOverrided)
@@ -1497,13 +1331,13 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 		Testing!
 		{
 			ExternalResourceData::parse; "ImageView 1D \"HogeResource\""
-				=> Ok(ExternalResourceData::ImageView { dim: ImageDimension::Linear, refname: LocationPacked(Location(1, 13), "HogeResource".into()) }),
+				=> Ok(ExternalResourceData::ImageView { dim: ImageDimension::Linear, refname: LocationPacked(Location(1, 14), "HogeResource".into()) }),
 			ExternalResourceData::parse; "ImageView Planar \"HogeResource\""
-				=> Ok(ExternalResourceData::ImageView { dim: ImageDimension::Planar, refname: LocationPacked(Location(1, 17), "HogeResource".into()) }),
+				=> Ok(ExternalResourceData::ImageView { dim: ImageDimension::Planar, refname: LocationPacked(Location(1, 18), "HogeResource".into()) }),
 			ExternalResourceData::parse; "ImageView 3D \"HogeResource\""
-				=> Ok(ExternalResourceData::ImageView { dim: ImageDimension::Cubic, refname: LocationPacked(Location(1, 13), "HogeResource".into()) }),
+				=> Ok(ExternalResourceData::ImageView { dim: ImageDimension::Cubic, refname: LocationPacked(Location(1, 14), "HogeResource".into()) }),
 			ExternalResourceData::parse; "SwapChainViews" => Ok(ExternalResourceData::SwapChainViews),
-			ExternalResourceData::parse; "Framebuffer" => Err(ParseError::UnknownExternalResource(0)),
+			ExternalResourceData::parse; "Framebuffer" => Err(ParseError::UnknownEnumValue(EnumType::ExternalResource, 0)),
 			ExternalResourceData::parse; "ImageView \"HogeResource\"" => Err(ParseError::Expected("Image Dimension".into(), 10))
 		}
 	}
@@ -1511,10 +1345,10 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 	{
 		Testing!
 		{
-			FramebufferRenderPassRef::parse; "<$FirstRP>" => Ok(FramebufferRenderPassRef::Int(LocationPacked(Location(1, 1), ConfigInt::Ref("FirstRP".into())))),
+			FramebufferRenderPassRef::parse; "<$FirstRP>" => Ok(FramebufferRenderPassRef::Int(LocationPacked(Location(1, 2), ConfigInt::Ref("FirstRP".into())))),
 			FramebufferRenderPassRef::parse; "<Presented>" => Ok(FramebufferRenderPassRef::Presented),
 			FramebufferRenderPassRef::parse; "n" => Ok(FramebufferRenderPassRef::None),
-			FramebufferRenderPassRef::parse; "<0" => Err(ParseError::ClosingRequired(2)),
+			FramebufferRenderPassRef::parse; "<0" => Err(ParseError::Required(RequestType::Closing, 2)),
 			FramebufferRenderPassRef::parse; "<AA>" => Err(ParseError::UnknownObjectRef("RenderPass", 1))
 		}
 	}
@@ -1523,8 +1357,8 @@ pub fn acquire_config_name<'s>(source: &mut ParseLine<'s>) -> Result<ParseLine<'
 	{
 		Testing!
 		{
-			StringLiteral::parse; "\"HogeResource\"" => Ok(LocationPacked(Location(1, 0), "HogeResource".into())),
-			StringLiteral::parse; "\"HogeResource" => Err(ParseError::ClosingRequired(13)),
+			StringLiteral::parse; "\"HogeResource\"" => Ok(LocationPacked(Location(1, 1), "HogeResource".into())),
+			StringLiteral::parse; "\"HogeResource" => Err(ParseError::Required(RequestType::Closing, 13)),
 			StringLiteral::parse; "A" => Err(ParseError::Expected("String Literal".into(), 0))
 		}
 	}

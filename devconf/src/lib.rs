@@ -1,12 +1,13 @@
 //! Postludium: Device Configuration Processor
 
-#![feature(associated_consts, box_syntax, slice_patterns)]
+#![feature(associated_consts, box_syntax, slice_patterns, placement_in_syntax, const_fn)]
 
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate parsetools;
 extern crate itertools;
 extern crate interlude;
 
+mod error;
 #[macro_use] mod items;
 pub use items::*;
 mod hobjects;
@@ -14,6 +15,7 @@ pub use hobjects::*;
 mod resolver;
 
 pub mod syntree;
+pub use syntree::Location;
 mod parser;
 pub use parser::*;
 mod assetloader;
@@ -21,26 +23,14 @@ pub use assetloader::LoadedAssets;
 mod instantiate;
 pub use instantiate::*;
 
-pub trait ErrorReporter
-{
-	fn report_fmt(&mut self, args: std::fmt::Arguments);
-
-	fn report(&mut self, msg: &str) { self.report_fmt(format_args!("{}\n", msg)); }
-}
-pub struct StdErrReporter;
-impl ErrorReporter for StdErrReporter
-{
-	fn report(&mut self, msg: &str) { std::io::stderr().write(msg.as_ref()).unwrap(); }
-	fn report_fmt(&mut self, args: std::fmt::Arguments) { std::io::stderr().write_fmt(args).unwrap(); }
-}
+pub use error::{ErrorReporter, StdErrReporter, ErrorLocation};
 
 // Entry Function //
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
-use std::io::Write;
 use std::borrow::Cow;
 use syntree::{ LocationPacked, ParsedDeviceResources };
-pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F, reporter: &mut ErrorReporter) -> ParsedDeviceResources
+pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F, reporter: &mut ErrorReporter) -> Option<ParsedDeviceResources>
 	where F: FnMut(&Path) -> std::io::Result<String>
 {
 	fn load_impl<F>(source: String, source_provider: &mut F, sink: &mut ParsedDeviceResources, loaded: &mut HashSet<PathBuf>, reporter: &mut ErrorReporter)
@@ -61,14 +51,14 @@ pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F, repo
 							loaded.insert(include_path.clone());
 							if load_impl(s, source_provider, sink, loaded, reporter).is_err()
 							{
-								reporter.report_fmt(format_args!("-- In parsing {:?}", include_path));
+								reporter.report_fmt(format_args!("-- In parsing {:?}", include_path), Some(&From::from(&loc)));
 								Err(())
 							}
 							else { Ok(()) }
 						},
 						Err(e) =>
 						{
-							reporter.report_fmt(format_args!("Failed to load {}(included at {}): {}", include_path.to_string_lossy(), loc, e));
+							reporter.report_fmt(format_args!("Failed to load {}: {}", include_path.to_string_lossy(), e), Some(&From::from(&loc)));
 							loaded.insert(include_path);
 							Err(())
 						}
@@ -76,22 +66,28 @@ pub fn load_configurations<F>(entername: Cow<Path>, mut source_provider: F, repo
 				}
 				else { Ok(()) }?
 			} Ok(()) },
-			Err(e) => { reporter.report_fmt(format_args!("{:?}", e)); Err(()) }
+			Err(e) => { reporter.report_fmt(format_args!("{:?}", e.cause()), Some(&e.location())); Err(()) }
 		}
 	}
 	let mut loaded_sources = HashSet::new();
 	let mut sink = ParsedDeviceResources::empty();
-	match source_provider(&entername)
+	let err_found = match source_provider(&entername)
 	{
 		Ok(s) =>
 		{
 			loaded_sources.insert(entername.clone().into_owned());
 			if load_impl(s, &mut source_provider, &mut sink, &mut loaded_sources, reporter).is_err()
 			{
-				reporter.report_fmt(format_args!("-- In parsing {:?}", entername));
+				reporter.report_fmt(format_args!("-- In parsing {:?}", entername), None);
+				true
 			}
+			else { false }
 		},
-		Err(e) => panic!("Failed to load {}: {}", entername.to_string_lossy(), e)
-	}
-	sink
+		Err(e) =>
+		{
+			reporter.report_fmt(format_args!("Failed to load {}: {}", entername.to_string_lossy(), e), None);
+			true
+		}
+	};
+	if err_found { None } else { Some(sink) }
 }

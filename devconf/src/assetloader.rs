@@ -5,7 +5,7 @@ use interlude::ffi::*;
 use std::collections::HashMap;
 use syntree::*;
 use std::ops::Deref;
-use resolver::ErrorReporter;
+use ErrorReporter;
 
 pub struct VertexShaderModule(ShaderModule);
 pub struct FragmentShaderModule(ShaderModule);
@@ -41,7 +41,7 @@ pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(en
 		{
 			if SM::STAGE != loaded.stage()
 			{
-				err.error(format!("Shader Asset {} has already loaded with different shader stage({})", name, loaded.stage()), loc);
+				err.report_fmt(format_args!("Shader Asset {} has already loaded with different shader stage({})", name, loaded.stage()), Some(&From::from(loc)));
 			}
 			true
 		}
@@ -52,7 +52,7 @@ pub fn load_assets<Engine: AssetProvider + Deref<Target = GraphicsInterface>>(en
 			match loader()
 			{
 				Ok(b) => { assets.shaders.insert(name, box b); },
-				Err(e) => err.error(format!("Failed to load asset {}: {:?}", name, e), loc)
+				Err(e) => err.report_fmt(format_args!("Failed to load asset {}: {:?}", name, e), Some(&From::from(loc)))
 			}
 		}
 	}

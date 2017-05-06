@@ -1,50 +1,54 @@
 // Resolving ConfigInt to contextual integer values
 
+use interlude;
 use interlude::ffi::*;
-use {std, syntree};
+use syntree;
 use syntree::*;
+use ErrorReporter;
 
-pub struct ErrorReporter { has_error: bool }
-impl ErrorReporter
+/// Short-circuit for { |x| o.f(x) }
+macro_rules! Delegate
 {
-	pub fn new() -> Self { ErrorReporter { has_error: false } }
-	pub fn error(&mut self, mut msg: String, location: &Location)
-	{
-		use std::io::Write;
-
-		self.has_error = true;
-		msg.push_str(&format!(" at line {}, col {}\n", location.0, location.1));
-		std::io::stderr().write_all(msg.as_bytes()).unwrap();
-	}
+	($o: expr => $f: ident) => { |x| $o.$f(x) }
 }
 
 // Values to ConfigInt conversions
 trait ScalarConversion<T> : Sized { fn _as(self) -> T; }
 impl ScalarConversion<usize> for u32 { fn _as(self) -> usize { self as usize } }
-fn resolve_config_int<F, CV>(config: &LocationPacked<ConfigInt>, error: &mut ErrorReporter, resolver: F) -> Option<CV>
-	where F: FnOnce(&str) -> Option<CV>, u32: ScalarConversion<CV>
+impl LocationPacked<ConfigInt>
 {
-	let &LocationPacked(ref loc, ref cint) = config;
-	match cint
+	fn resolve<F, CV>(&self, error: &mut ErrorReporter, resolver: F) -> Option<CV> where F: FnOnce(&str) -> Option<CV>, u32: ScalarConversion<CV>
 	{
-		&ConfigInt::Ref(ref refn) => if let Some(v) = resolver(refn) { Some(v) } else
+		let &LocationPacked(ref loc, ref cint) = self;
+		match cint
 		{
-			error.error(format!("Unknown ConfigInt Reference to {}", refn), &loc);
-			None
-		},
-		&ConfigInt::Value(v) => Some(v._as())
+			&ConfigInt::Ref(ref refn) => if let Some(v) = resolver(refn) { Some(v) } else
+			{
+				error.report_fmt(format_args!("Unknown ConfigInt Reference to {}", refn), Some(&loc.into()));
+				None
+			},
+			&ConfigInt::Value(v) => Some(v._as())
+		}
+	}
+}
+impl Transition<LocationPacked<ConfigInt>>
+{
+	fn resolve<F, CV>(&self, error: &mut ErrorReporter, resolver: F) -> Option<Transition<CV>> where F: Fn(&str) -> Option<CV>, u32: ScalarConversion<CV>
+	{
+		let (f, t) = (self.from.resolve(error, &resolver), self.to.resolve(error, &resolver));
+		f.and_then(|from| t.map(|to| Transition { from, to }))
 	}
 }
 #[cfg(test)] mod tests
 {
 	use super::*;
+	use error::StdErrReporter;
 
 	#[test] fn configint_resolver()
 	{
-		let mut er = ErrorReporter::new();
-		assert_eq!(resolve_config_int(&LocationPacked(Location(1, 0), ConfigInt::Ref("testing".into())), &mut er, |_| Some(0)), Some(0));
-		assert_eq!(resolve_config_int(&LocationPacked(Location(1, 0), ConfigInt::Ref("testing".into())), &mut er, |_| None), None);
-		assert_eq!(resolve_config_int(&LocationPacked(Location(1, 0), ConfigInt::Value(3)), &mut er, |_| None), Some(3));
+		assert_eq!(LocationPacked(Location(1, 0), ConfigInt::Ref("testing".into())).resolve(&mut StdErrReporter, |_| Some(0)), Some(0));
+		assert_eq!(LocationPacked(Location(1, 0), ConfigInt::Ref("testing".into())).resolve(&mut StdErrReporter, |_| None), None);
+		assert_eq!(LocationPacked(Location(1, 0), ConfigInt::Value(3)).resolve(&mut StdErrReporter, |_| None), Some(3));
 	}
 }
 
@@ -73,66 +77,49 @@ impl RPSubpassDesc
 	{
 		ResolvedRPSubpassDesc
 		{
-			color_outs: self.color_outs.into_iter().map(|ci| resolve_config_int(&ci, er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect(),
-			inputs: self.inputs.into_iter().map(|ci| resolve_config_int(&ci, er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect()
+			color_outs: self.color_outs.into_iter().map(|ci| ci.resolve(er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect(),
+			inputs: self.inputs.into_iter().map(|ci| ci.resolve(er, |refn| parent.attachments.reverse_index(refn)).unwrap_or(0)).collect()
 		}
 	}
 }
 
 pub struct ResolvedRPSubpassDeps
 {
-	pub passtrans: Transition<usize>, pub access_mask: Transition<LocationPacked<AccessFlags>>,
+	pub passtrans: Transition<usize>, pub access_mask: Transition<LocationPacked<interlude::AccessFlags>>,
 	pub stage_bits: LocationPacked<VkPipelineStageFlags>, pub by_region: bool
 }
 impl RPSubpassDeps
 {
-	pub fn resolve(self, parent: &RenderPassData, er: &mut ErrorReporter) -> ResolvedRPSubpassDeps
+	pub fn resolve(self, parent: &RenderPassData, er: &mut ErrorReporter) -> Option<ResolvedRPSubpassDeps>
 	{
-		ResolvedRPSubpassDeps
+		self.passtrans.resolve(er, Delegate!(parent.subpasses => reverse_index)).map(move |passtrans| ResolvedRPSubpassDeps
 		{
-			passtrans: Transition
-			{
-				from: resolve_config_int(&self.passtrans.from, er, |refn| parent.subpasses.reverse_index(refn)).unwrap_or(0),
-				to: resolve_config_int(&self.passtrans.to, er, |refn| parent.subpasses.reverse_index(refn)).unwrap_or(0)
-			},
-			access_mask: self.access_mask, stage_bits: self.stage_bits, by_region: self.by_region
-		}
+			passtrans, access_mask: self.access_mask, stage_bits: self.stage_bits, by_region: self.by_region
+		})
 	}
-}
-
-/// Short-circuit for { |x| o.f(x) }
-macro_rules! Delegate
-{
-	($o: expr => $f: ident) => { |x| $o.$f(x) }
 }
 
 pub struct PreciseRenderPass { pub obj: usize, pub subpass: usize }
 impl PreciseRenderPassRef
 {
-	pub fn resolve(self, parent: &ParsedDeviceResources, er: &mut ErrorReporter) -> PreciseRenderPass
+	pub fn resolve(self, parent: &ParsedDeviceResources, er: &mut ErrorReporter) -> Option<PreciseRenderPass>
 	{
-		let ox = resolve_config_int(&self.rp, er, Delegate!(parent.renderpasses => reverse_index)).unwrap_or(0);
-		if !er.has_error
+		self.rp.resolve(er, Delegate!(parent.renderpasses => reverse_index)).and_then(|obj|
 		{
-			let ref o = parent.renderpasses[ox];
-			PreciseRenderPass
-			{
-				obj: ox, subpass: resolve_config_int(&self.subpass, er, Delegate!(o.subpasses => reverse_index)).unwrap_or(0)
-			}
-		}
-		else { PreciseRenderPass { obj: 0, subpass: 0 } }
+			let ref o = parent.renderpasses[obj];
+			self.subpass.resolve(er, Delegate!(o.subpasses => reverse_index)).map(|subpass| PreciseRenderPass { obj, subpass })
+		})
 	}
 }
 
+#[derive(PartialEq, Eq)]
 pub struct PipelineLayout { pub descs: Vec<usize>, pub pushconstants: Vec<usize> }
 impl syntree::PipelineLayout
 {
-	fn resolve(&self, parent: &ParsedDeviceResources, er: &mut ErrorReporter) -> PipelineLayout
+	pub fn resolve(&self, parent: &ParsedDeviceResources, er: &mut ErrorReporter) -> Option<PipelineLayout>
 	{
-		PipelineLayout
-		{
-			descs: self.descs.iter().map(|lp| resolve_config_int(lp, er, Delegate!(parent.descriptor_set_layouts => reverse_index)).unwrap_or(0)).collect(),
-			pushconstants: self.pushconstants.iter().map(|lp| resolve_config_int(lp, er, Delegate!(parent.push_constant_layouts => reverse_index)).unwrap_or(0)).collect()
-		}
+		let d = self.descs.iter().map(|lp| lp.resolve(er, Delegate!(parent.descriptor_set_layouts => reverse_index))).collect::<Option<_>>();
+		let p = self.pushconstants.iter().map(|lp| lp.resolve(er, Delegate!(parent.push_constant_layouts => reverse_index))).collect::<Option<_>>();
+		d.and_then(|descs| p.map(|pushconstants| PipelineLayout { descs, pushconstants }))
 	}
 }

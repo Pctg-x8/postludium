@@ -8,7 +8,8 @@ use std::collections::{HashMap, BTreeMap};
 use std::path::PathBuf;
 use interlude::ffi::*;
 use interlude::*;
-use parser::ParseError;
+use interlude;
+use error::ParseError;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum OperationResult { Success, Failed(Cow<'static, str>) }
@@ -35,7 +36,7 @@ impl<'s> InsertionResult<'s>
 	}
 }
 
-pub struct NamedContents<T>(HashMap<String, usize>, Vec<T>);
+pub struct NamedContents<T>(pub HashMap<String, usize>, pub Vec<T>);
 impl<T> Index<usize> for NamedContents<T>
 {
 	type Output = T;
@@ -46,7 +47,6 @@ impl<'a, T> Index<&'a str> for NamedContents<T>
 	type Output = T;
 	fn index(&self, s: &'a str) -> &T { &self.1[self.0[s]] }
 }
-impl<T> Deref for NamedContents<T> { type Target = [T]; fn deref(&self) -> &[T] { &self.1 } }
 impl<T> NamedContents<T>
 {
 	pub fn new() -> Self { NamedContents(HashMap::new(), Vec::new()) }
@@ -64,6 +64,13 @@ impl<T> NamedContents<T>
 	{
 		if let Some(n) = name { self.insert(n, value) } else { self.insert_unnamed(value); InsertionResult::Success }
 	}
+	pub fn make_link(&mut self, name: Cow<str>, linkref: usize)
+	{
+		if self.0.contains_key(name.deref()) { *self.0.get_mut(name.as_ref()).unwrap() = linkref; }
+		else { self.0.insert(name.into_owned(), linkref); }
+	}
+	pub fn iter(&self) -> std::slice::Iter<T> { self.1.iter() }
+	pub fn is_empty(&self) -> bool { self.1.is_empty() }
 
 	pub fn reverse_index(&self, k: &str) -> Option<usize>
 	{
@@ -79,21 +86,29 @@ impl<T> NamedContents<T>
 		h
 	}
 }
-impl<T: Eq> NamedContents<T>
+impl<T: Eq> NamedContents<T> where T: std::borrow::Borrow<T> + std::borrow::ToOwned<Owned = T>
 {
-	pub fn insert_vunique<'s>(&mut self, name: Cow<'s, str>, value: T) -> InsertionResult<'s>
+	pub fn insert_vunique<'s>(&mut self, name: Cow<'s, str>, value: Cow<T>) -> InsertionResult<'s>
 	{
 		if self.0.contains_key(name.deref()) { InsertionResult::Duplicated(name) }
 		else { let index = self.insert_unnamed_vunique(value); self.0.insert(name.into_owned(), index); InsertionResult::Success }
 	}
-	pub fn insert_unnamed_vunique(&mut self, value: T) -> usize
+	pub fn insert_unnamed_vunique(&mut self, value: Cow<T>) -> usize
 	{
-		if let Some((i, _)) = self.1.iter().enumerate().find(|&(_, o)| *o == value) { i }
-		else { self.1.push(value); self.1.len() - 1 }
+		if let Some((i, _)) = self.1.iter().enumerate().find(|&(_, o)| o == value.as_ref()) { i }
+		else { self.1.push(value.into_owned()); self.1.len() - 1 }
 	}
-	pub fn insert_auto_vunique<'s>(&mut self, name: Option<Cow<'s, str>>, value: T) -> InsertionResult<'s>
+	pub fn insert_auto_vunique<'s>(&mut self, name: Option<Cow<'s, str>>, value: Cow<T>) -> InsertionResult<'s>
 	{
 		if let Some(n) = name { self.insert_vunique(n, value) } else { self.insert_unnamed_vunique(value); InsertionResult::Success }
+	}
+}
+impl<T: Debug> std::fmt::Debug for NamedContents<T>
+{
+	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result
+	{
+		self.1.iter().enumerate().map(|(x, c)| format!("{:?}: {:?}", self.0.iter().filter(|&(_, &y)| y == x).map(|(n, _)| n).collect::<Vec<_>>(), c))
+			.collect::<Vec<_>>().fmt(fmt)
 	}
 }
 
@@ -155,10 +170,6 @@ pub enum ImageDimension
 	/// 3D
 	Cubic
 }
-#[derive(Clone, Copy, PartialEq, Eq, Debug)] pub struct AccessFlags(pub VkAccessFlags);
-#[derive(Clone, Copy, PartialEq, Eq, Debug)] pub struct ShaderStageFlags(pub VkShaderStageFlags);
-impl std::cmp::PartialEq<VkAccessFlags> for AccessFlags { fn eq(&self, t: &VkAccessFlags) -> bool { self.0 == *t } }
-impl std::cmp::PartialEq<VkShaderStageFlags> for ShaderStageFlags { fn eq(&self, t: &VkShaderStageFlags) -> bool { self.0 == *t } }
 
 pub struct ParsedDeviceResources
 {
@@ -240,12 +251,10 @@ pub enum DescriptorEntryKind
 	Sampler, CombinedSampler, SampledImage, StorageImage,
 	UniformBuffer(BufferDescriptorOption), StorageBuffer(BufferDescriptorOption), InputAttachment
 }
-#[derive(Debug, PartialEq, Eq)]
-pub struct DescriptorEntry { pub kind: DescriptorEntryKind, pub count: usize, pub visibility: ShaderStageFlags }
-#[derive(Debug, PartialEq, Eq)]
-pub struct DescriptorSetLayoutData { pub entries: Vec<DescriptorEntry> }
-#[derive(Debug, PartialEq, Eq)]
-pub struct PushConstantLayout { pub range: Range<usize>, pub visibility: ShaderStageFlags }
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct DescriptorSetLayoutData { pub entries: Vec<interlude::Descriptor> }
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct PushConstantLayout { pub range: Range<usize>, pub visibility: interlude::ShaderStage }
 #[derive(Debug, PartialEq)]
 pub struct PipelineLayout { pub descs: Vec<LocationPacked<ConfigInt>>, pub pushconstants: Vec<LocationPacked<ConfigInt>> }
 #[derive(Debug, PartialEq)]

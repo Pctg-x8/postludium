@@ -1,8 +1,9 @@
 // High-ordered objects
 
 use parsetools::*;
-use parser::{ident_break, ignore_chars, ParseError, from_token};
-use syntree::*;
+use parser::{ident_break, ignore_chars, from_token};
+use error::*;
+use syntree::Transition;
 
 impl<T> Transition<T>
 {
@@ -17,7 +18,7 @@ impl<T> Transition<T>
 				childparser(input.drop_opt(2).drop_while(ignore_chars)).map(|b| Transition { from: a, to: b })
 			}
 			else if from_token(input) { childparser(input.drop_while(ignore_chars)).map(|b| Transition { from: b, to: a }) }
-			else { Err(ParseError::DirectionRequired(input.current())) }
+			else { Err(ParseError::Required(RequestType::Direction, input.current())) }
 		})
 	}
 }
@@ -44,20 +45,20 @@ impl<T: Clone> Transition<T>
 #[cfg(test)] mod tests
 {
 	use itertools::Itertools;
-	use super::*;
-	use interlude::ffi::*;
+	use interlude; use parsetools::*;
 	use parser::FromSource;
+	use syntree::*; use error::*;
 
 	#[test] fn parse_transition()
 	{
 		Testing!
 		{
-			PartialApply1!(Transition::parse; ShaderStageFlags::parse); "Vertex -> Fragment"
-				=> Ok(Transition { from: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT), to: ShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT) }),
-			PartialApply1!(Transition::parse; ShaderStageFlags::parse); "Vertex"
-				=> Err(ParseError::DirectionRequired(6)),
-			PartialApply1!(Transition::parse_opt; ShaderStageFlags::parse); "Vertex"
-				=> Ok(Transition { from: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT), to: ShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT) })
+			PartialApply1!(Transition::parse; interlude::ShaderStage::parse); "Vertex -> Fragment"
+				=> Ok(Transition { from: interlude::ShaderStage::Vertex, to: interlude::ShaderStage::Fragment }),
+			PartialApply1!(Transition::parse; interlude::ShaderStage::parse); "Vertex"
+				=> Err(ParseError::Required(RequestType::Direction, 6)),
+			PartialApply1!(Transition::parse_opt; interlude::ShaderStage::parse); "Vertex"
+				=> Ok(Transition { from: interlude::ShaderStage::Vertex, to: interlude::ShaderStage::Vertex })
 		}
 	}
 }
